@@ -3,6 +3,25 @@ export const sampleTranscripts = [
     id: 'northstar-cloud',
     label: 'Example: enterprise software',
     description: 'Fictional but realistic SaaS earnings call with ARR, margin, and sales-cycle commentary.',
+    baseline: {
+      companyName: 'Northstar Cloud Holdings',
+      unitLabel: 'USDm',
+      currentRevenue: 1692,
+      revenueGrowth: [17, 15, 13, 11, 9],
+      grossMarginStart: 78,
+      grossMarginEnd: 79.5,
+      operatingMarginStart: 18,
+      operatingMarginEnd: 22,
+      taxRate: 21,
+      capexPct: 4.3,
+      daPct: 2.4,
+      nwcPct: 1.2,
+      wacc: 9.2,
+      terminalGrowth: 3.0,
+      shareCount: 145,
+      netDebt: -120,
+      exitEbitdaMultiple: 15.5,
+    },
     transcript: `Northstar Cloud Holdings Q1 2026 Earnings Call Transcript
 May 7, 2026
 
@@ -48,6 +67,25 @@ We are balancing growth and efficiency. The key modeling question is less churn 
     id: 'ridgeway-industrial',
     label: 'Example: industrials',
     description: 'Fictional but realistic industrial earnings call with pricing, volume, capex, and macro exposure.',
+    baseline: {
+      companyName: 'Ridgeway Motion Systems',
+      unitLabel: 'USDm',
+      currentRevenue: 4720,
+      revenueGrowth: [2, 3, 3.5, 4, 4],
+      grossMarginStart: 29.5,
+      grossMarginEnd: 31,
+      operatingMarginStart: 13.5,
+      operatingMarginEnd: 15.2,
+      taxRate: 23,
+      capexPct: 3.1,
+      daPct: 2.2,
+      nwcPct: 2.4,
+      wacc: 9.5,
+      terminalGrowth: 2.5,
+      shareCount: 82,
+      netDebt: 640,
+      exitEbitdaMultiple: 10.5,
+    },
     transcript: `Ridgeway Motion Systems Q4 2025 Earnings Call Transcript
 February 19, 2026
 

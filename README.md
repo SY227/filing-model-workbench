@@ -1,22 +1,68 @@
 # Earnings-to-Model Update Agent
 
-A polished local prototype for turning an earnings transcript into a structured, reviewable model-update workflow.
+A local prototype for outside analysts who want to go from an earnings transcript plus baseline assumptions to a transcript-backed forecast and valuation update.
 
-## What it does
+## What changed in this version
 
-The app supports exactly two input paths:
+The app is no longer centered on transcript commentary.
 
-1. paste a transcript URL, or
-2. paste transcript text directly.
+It now works as an **external analyst modeling workflow**:
 
-It then runs a multi-step workflow:
+1. ingest a transcript from URL or pasted text
+2. enter baseline operating and valuation assumptions
+3. let Gemini propose structured scenario revisions
+4. run deterministic forecast and DCF math in code
+5. export model-ready tables and a reviewable report pack
 
-- ingest and clean the transcript
-- identify metadata, tone, and major themes
-- extract key financial signals
-- map findings to modeling drivers
-- generate base, upside, and downside implications
-- produce a reviewable output pack with explicit vs inferred separation
+## Core product flow
+
+### Step 1: Transcript input
+
+- paste transcript URL, or
+- paste transcript text directly
+
+### Step 2: Baseline analyst model input
+
+The app includes a structured baseline panel for:
+
+- LTM revenue
+- FY+1 to FY+5 revenue growth
+- gross margin start and FY+5 target
+- operating margin start and FY+5 target
+- tax rate
+- capex % of revenue
+- D&A % of revenue
+- working capital % of revenue
+- WACC
+- terminal growth
+- share count
+- net debt / cash
+- exit EBITDA multiple
+
+### Step 3: Agentic workflow
+
+Visible workflow stages:
+
+- ingesting transcript
+- extracting management guidance and signals
+- mapping transcript evidence to model drivers
+- revising assumptions
+- building base / upside / downside forecast
+- running valuation view
+- preparing model update pack
+
+### Step 4: Outputs
+
+The main outputs are now model-oriented:
+
+- executive model summary
+- assumption change log
+- deterministic forecast table
+- DCF-style valuation view
+- scenario comparison
+- transcript evidence and model driver mapping
+- review flags
+- exportable CSV and Excel-friendly copy blocks
 
 ## Stack
 
@@ -24,6 +70,7 @@ It then runs a multi-step workflow:
 - **Backend:** Express
 - **Model:** Gemini 2.5 Flash Lite via Google Generative Language API
 - **Parsing:** server-side HTML fetching + text extraction with Cheerio
+- **Model math:** deterministic forecast + DCF logic in code
 
 ## Run locally
 
@@ -52,78 +99,100 @@ PORT=8787
 
 `GEMINI_MODEL` is optional. The app defaults to `gemini-2.5-flash-lite`.
 
-## Architecture
+## Revised architecture
 
 ### Frontend
 
-The React app is a desktop-first, report-style interface with:
+The React app now behaves like a modeling workspace, not a transcript summary screen.
 
-- premium landing and input area
-- two-path ingestion UI
-- visible workflow progress rail
-- collapsible results sections
-- editable analyst baseline cells in the delta log
-- copy and print/export actions
+It includes:
+
+- transcript ingestion UI
+- structured analyst baseline assumptions panel
+- multi-step progress rail
+- forecast and valuation tables
+- scenario selector
+- CSV download actions
+- Excel-friendly copy actions
+- transcript evidence and review sections
 
 ### Backend
 
 The Express server handles:
 
-- transcript URL fetching
-- HTML cleanup and transcript extraction
-- pasted transcript normalization
-- two-step Gemini workflow
-- streaming stage updates to the UI over SSE
+- transcript fetching and cleanup
+- transcript normalization
+- Gemini extraction pass
+- Gemini model-revision pass
+- deterministic forecast and DCF calculations
+- SSE streaming stage updates back to the client
 
-## Agentic workflow structure
+## Gemini reasoning vs deterministic math
 
-This is intentionally not a single blob completion.
+This split is the core of the product.
 
-### Pass 1: Extraction
+### Gemini is used for
 
-Gemini receives the cleaned transcript and returns structured JSON for:
+- extracting transcript metadata and themes
+- identifying guidance and model-relevant signals
+- mapping transcript evidence to modeling drivers
+- proposing conservative scenario revisions
+- generating the executive model summary and review trail
 
-- metadata
-- tone and themes
-- key signals
-- explicit statements
-- inferred implications
-- review flags
+### Code is used for
 
-### Pass 2: Synthesis
+- baseline normalization
+- multi-year forecast roll-forward
+- gross margin and operating margin path construction
+- NOPAT and free cash flow approximation
+- DCF-style enterprise value and equity value math
+- implied value per share
+- scenario comparison tables
+- sensitivity table generation
+- CSV export formatting
 
-Gemini receives the extraction JSON plus transcript context and returns structured JSON for:
+This keeps judgment and language in the model layer, while keeping the actual math deterministic and inspectable.
 
-- executive summary
-- assumption delta log
-- scenario views
-- model update checklist
-- review trail
+## Deterministic model math implemented
 
-The UI renders these into a finance-oriented report pack.
+The current deterministic layer includes:
+
+- revenue roll-forward from baseline + scenario growth deltas
+- gross margin and operating margin paths across FY+1 to FY+5
+- operating income, EBITDA, tax, NOPAT
+- capex, D&A, working capital impact
+- free cash flow
+- DCF-style enterprise value
+- equity value and value per share
+- base-case EV sensitivity matrix
 
 ## Implemented
 
-- working URL ingestion with graceful failure path
-- working pasted-text ingestion
-- transcript cleaning and normalization
-- structured Gemini JSON workflow
-- confidence labels and explicit vs inferred separation
-- assumption delta log with analyst-editable baseline fields
-- scenario section
-- review flags and checklist
-- copy actions and print-friendly export
-- built-in example transcripts for demo convenience
+- working transcript URL ingestion with graceful failure
+- working pasted transcript ingestion
+- structured baseline assumptions panel
+- transcript-to-driver mapping
+- Gemini-driven scenario adjustment proposals
+- deterministic base / upside / downside forecast math
+- deterministic DCF-style valuation output
+- valuation comparison across scenarios
+- CSV downloads for forecast, assumptions, and valuation
+- copy-ready forecast and valuation tables for Excel
+- transcript evidence section with explicit vs inferred separation
+- review flags and model update checklist
+- harmony-green visual refresh
 
 ## Simplified
 
-- URL parsing is heuristic, not site-specific
-- no authentication or persistence layer
-- no PDF export service, print/export uses browser print
-- no spreadsheet integration or direct model writeback
-- no transcript chunk orchestration for extremely long calls beyond simple truncation
+- URL parsing is heuristic rather than site-specific
+- no persistence or user accounts
+- no direct spreadsheet writeback
+- no fully general three-statement model
+- DCF uses a practical external-analyst approximation layer instead of company-specific detailed line items
+- very long transcripts are truncated before model submission rather than chunk-orchestrated
 
 ## Notes
 
-- The app is designed to avoid false precision. It asks the model for directional updates unless exact figures are explicitly supported by the transcript.
+- The product is conservative by design. It avoids false precision and treats transcript language as evidence, not certainty.
+- The app is designed for outside analysts. It does not assume internal company planning access.
 - If transcript extraction from a URL fails, the app tells the user to use the paste-text path instead of silently breaking.
