@@ -13,8 +13,8 @@ The output is meant to feel like disciplined banker or senior-analyst work produ
 ## v1 workflow
 
 1. load a **10-Q or 10-K** by URL or pasted text
-2. review the extracted filing information
-3. adjust the analyst baseline assumptions if needed
+2. let Gemini extract the filing and draft the normalized model inputs
+3. optionally review the extracted filing snapshot
 4. generate the analysis pack
 
 ## What the system produces
@@ -25,7 +25,7 @@ The final pack is organized as:
 2. Business overview from filing
 3. Key filing takeaways
 4. What matters for the model
-5. Reported base and key assumptions
+5. AI-drafted model assumptions
 6. Scenario analysis
 7. Valuation summary
 8. Key sensitivities
@@ -43,13 +43,14 @@ The backend:
 - fetches and normalizes filing text from a URL, or accepts pasted text directly
 - identifies filing metadata where possible
 - extracts a reported base and disclosure-driven takeaways
-- builds filing-grounded model framing with measured scenario adjustments
+- drafts a complete normalized model baseline directly from the filing
+- classifies drafted fields as reported, derived, proposed, or review required
 - runs deterministic forecast and DCF-style valuation math in code
 - formats a final analysis pack for review and export
 
 ### Deterministic math remains code-driven
 
-Gemini is used for structured extraction and writing quality.
+Gemini is used for structured extraction, baseline drafting, and writing quality.
 The forecast, scenario roll-forward, DCF, valuation bridge, and sensitivity matrix remain deterministic and inspectable in code.
 
 That split is deliberate.
@@ -67,8 +68,6 @@ The product should not pretend the filing alone creates fully precise model outp
 
 ```bash
 cd /Users/sy1127/Desktop/OpenClaw-Projects/earnings-to-model-update-agent
-cp .env.example .env
-# add your Gemini API key to .env
 npm install
 npm run dev
 ```
@@ -100,14 +99,15 @@ These are loaded by URL from SEC EDGAR rather than fabricated example content.
 
 ## File structure
 
-- `src/App.jsx` — filing-only v1 interface, review step, report rendering, export actions
-- `src/assumptions.js` — baseline assumption schema for the deterministic model layer
+- `src/App.jsx` — filing-only interface, snapshot review, drafted assumptions display, report rendering, export actions
+- `src/assumptions.js` — shared drafted-baseline field metadata and formatting helpers
 - `src/samples.js` — real SEC public example filings
 - `src/styles.css` — restrained institutional-finance UI styling
-- `server/index.js` — review endpoint, SSE processing pipeline, result assembly
-- `server/promptSchemas.js` — filing extraction, filing analysis, and report-formatting prompts
+- `server/index.js` — review endpoint, SSE processing pipeline, drafted-baseline assembly, result payload
+- `server/promptSchemas.js` — filing extraction, drafted-baseline, and report-formatting prompts
 - `server/sourceNormalization.js` — filing URL/text ingestion and normalization
 - `server/modeling.js` — deterministic scenario, valuation bridge, and sensitivity logic
+- `server/schemas.js` — strict JSON schemas and defaults for Gemini response normalization
 
 ## Intentionally deferred rather than faked
 
@@ -124,5 +124,6 @@ Those features are omitted on purpose rather than mocked.
 
 - This is an external-analyst approximation layer, not a claim of full model completeness.
 - The filing is treated as the factual base.
-- Reported facts, inferred implications, and review-required items should remain visibly distinct.
+- Reported facts, derived implications, proposed assumptions, and review-required items remain visibly distinct.
 - Where the filing does not support precision, the tool is designed to stay measured rather than over-claim certainty.
+- Some model inputs will still rely on conservative fallbacks when the filing does not support direct extraction.

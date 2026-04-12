@@ -22,6 +22,7 @@ import {
   FILING_ANALYSIS_SCHEMA,
   FILING_EXTRACTION_SCHEMA,
   REPORT_PACK_SCHEMA,
+  DRAFTED_BASELINE_META_SCHEMA,
 } from './schemas.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,18 +49,17 @@ app.get('/api/health', (_req, res) => {
 app.post('/api/review-filing', async (req, res) => {
   try {
     ensureApiKey();
-    const { filing, baseline } = req.body ?? {};
+    const { filing } = req.body ?? {};
     if (!filing) throw new Error('A 10-Q or 10-K input is required.');
 
-    const analystBaseline = normalizeBaseline(baseline || {});
-    const { filingSource, filingExtraction, baselineSuggested } = await extractFilingReview({ filing, baseline: analystBaseline });
+    const { filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta } = await extractFilingReview({ filing });
 
     res.json(
       buildReviewPacket({
         filingSource,
         filingExtraction,
-        baselineInput: analystBaseline,
-        baselineSuggested,
+        draftedBaseline,
+        draftedBaselineMeta,
       })
     );
   } catch (error) {
@@ -93,20 +93,12 @@ app.post('/api/process', async (req, res) => {
   try {
     ensureApiKey();
 
-    const { filing, baseline } = req.body ?? {};
-    if (!filing) {
-      throw new Error('A 10-Q or 10-K input is required.');
-    }
-
-    const analystBaseline = normalizeBaseline(baseline || {});
+    const { filing } = req.body ?? {};
+    if (!filing) throw new Error('A 10-Q or 10-K input is required.');
 
     markStage('ingest', 'Ingesting filing', 'Fetching or normalizing the 10-Q or 10-K text.');
     const filingSource = await ingestSource(
-      {
-        ...filing,
-        kind: 'filing',
-        label: 'Filing',
-      },
+      { ...filing, kind: 'filing', label: 'Filing' },
       { required: true, minChars: 700 }
     );
 
@@ -115,30 +107,27 @@ app.post('/api/process', async (req, res) => {
       await callGeminiJson(
         buildFilingExtractionPrompt({
           filing: buildSourcePacketForPrompt(filingSource, 24_000),
-          baseline: analystBaseline,
         }),
         0.1
       ),
       FILING_EXTRACTION_SCHEMA
     );
 
-    const baselineUsed = mergeBaselineWithReportedBase(analystBaseline, filingExtraction);
-
-    markStage('frame', 'Drafting assumptions and model implications', 'Converting filing disclosures into a reported base, proposed assumptions, scenario setup, and valuation framing.');
+    markStage('frame', 'Drafting baseline and model implications', 'Drafting the full normalized model baseline directly from the filing, then framing scenarios and valuation context.');
     const filingAnalysis = applySchemaDefaults(
       await callGeminiJson(
-        buildFilingAnalysisPrompt({
-          filingExtraction,
-          baseline: baselineUsed,
-        }),
+        buildFilingAnalysisPrompt({ filingExtraction }),
         0.18
       ),
       FILING_ANALYSIS_SCHEMA
     );
 
-    markStage('forecast', 'Running deterministic model math', 'Rolling the filing-grounded setup through code-driven forecast and valuation logic.');
+    const draftedBaseline = buildDraftedBaseline(filingExtraction, filingAnalysis);
+    const draftedBaselineMeta = buildDraftedBaselineMeta(filingAnalysis?.draftedBaselineMeta, filingExtraction, draftedBaseline);
+
+    markStage('forecast', 'Running deterministic model math', 'Rolling the AI-drafted filing baseline through code-driven forecast and valuation logic.');
     const modelPack = buildModelPack({
-      baseline: baselineUsed,
+      baseline: draftedBaseline,
       scenarioAdjustments: {
         base: normalizeScenarioAdjustments(filingAnalysis?.scenarioAdjustments?.base),
         upside: normalizeScenarioAdjustments(filingAnalysis?.scenarioAdjustments?.upside),
@@ -146,12 +135,16 @@ app.post('/api/process', async (req, res) => {
       },
     });
 
-    markStage('pack', 'Preparing analysis pack', 'Formatting the final report shell, scenario commentary, and valuation summary.');
+    markStage('pack', 'Preparing analysis pack', 'Formatting the final report shell, scenario commentary, drafted assumptions, and valuation summary.');
     const reportPack = applySchemaDefaults(
       await callGeminiJson(
         buildReportFormattingPrompt({
           filingExtraction,
-          filingAnalysis,
+          filingAnalysis: {
+            ...filingAnalysis,
+            draftedBaseline,
+            draftedBaselineMeta,
+          },
           modelSummary: buildModelSummaryForPrompt(modelPack),
         }),
         0.2
@@ -161,20 +154,17 @@ app.post('/api/process', async (req, res) => {
 
     stageTimings[stageTimings.length - 1].durationMs = Date.now() - currentStageStart;
 
-    send(
-      'result',
-      buildResult({
-        filingSource,
-        filingExtraction,
-        filingAnalysis,
-        reportPack,
-        modelPack,
-        stageTimings,
-        model: GEMINI_MODEL,
-        baselineInput: analystBaseline,
-        baselineUsed,
-      })
-    );
+    send('result', buildResult({
+      filingSource,
+      filingExtraction,
+      filingAnalysis,
+      draftedBaseline,
+      draftedBaselineMeta,
+      reportPack,
+      modelPack,
+      stageTimings,
+      model: GEMINI_MODEL,
+    }));
     send('done', { ok: true, totalDurationMs: Date.now() - startedAt });
   } catch (error) {
     send('error', {
@@ -203,13 +193,9 @@ function ensureApiKey() {
   }
 }
 
-async function extractFilingReview({ filing, baseline }) {
+async function extractFilingReview({ filing }) {
   const filingSource = await ingestSource(
-    {
-      ...filing,
-      kind: 'filing',
-      label: 'Filing',
-    },
+    { ...filing, kind: 'filing', label: 'Filing' },
     { required: true, minChars: 700 }
   );
 
@@ -217,27 +203,33 @@ async function extractFilingReview({ filing, baseline }) {
     await callGeminiJson(
       buildFilingExtractionPrompt({
         filing: buildSourcePacketForPrompt(filingSource, 24_000),
-        baseline,
       }),
       0.1
     ),
     FILING_EXTRACTION_SCHEMA
   );
 
+  const filingAnalysis = applySchemaDefaults(
+    await callGeminiJson(buildFilingAnalysisPrompt({ filingExtraction }), 0.18),
+    FILING_ANALYSIS_SCHEMA
+  );
+
+  const draftedBaseline = buildDraftedBaseline(filingExtraction, filingAnalysis);
+  const draftedBaselineMeta = buildDraftedBaselineMeta(filingAnalysis?.draftedBaselineMeta, filingExtraction, draftedBaseline);
+
   return {
     filingSource,
     filingExtraction,
-    baselineSuggested: mergeBaselineWithReportedBase(baseline, filingExtraction),
+    draftedBaseline,
+    draftedBaselineMeta,
   };
 }
 
-function buildReviewPacket({ filingSource, filingExtraction, baselineInput, baselineSuggested }) {
+function buildReviewPacket({ filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta }) {
   return {
     generatedAt: new Date().toISOString(),
     filingMetadata: filingExtraction?.filingMetadata || filingSource.fallbackMetadata,
-    sources: {
-      filing: summarizeSource(filingSource),
-    },
+    sources: { filing: summarizeSource(filingSource) },
     businessOverview: filingExtraction?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
     derivedMetrics: filingExtraction?.derivedMetrics || [],
@@ -248,46 +240,52 @@ function buildReviewPacket({ filingSource, filingExtraction, baselineInput, base
     reviewFlags: filingExtraction?.reviewFlags || [],
     confidenceMap: filingExtraction?.confidenceMap || {},
     evidenceMap: filingExtraction?.evidenceMap || {},
+    draftedBaseline,
+    draftedBaselineMeta,
     missingBaseInputs: filingExtraction?.missingBaseInputs || [],
-    baselineInput,
-    baselineSuggested,
   };
 }
 
-function mergeBaselineWithReportedBase(baseline, filingExtraction) {
+function buildDraftedBaseline(filingExtraction, filingAnalysis) {
+  const aiDraft = filingAnalysis?.draftedBaseline || {};
   const metrics = filingExtraction?.reportedBase?.normalizedMetrics || {};
   const reportedFacts = filingExtraction?.reportedBase?.reportedFacts || [];
   const filingType = filingExtraction?.filingMetadata?.filingType || null;
-  const merged = { ...baseline };
 
-  const normalizedRevenue = Number.isFinite(metrics.revenueLtm)
-    ? metrics.revenueLtm
-    : inferRevenueBaseFromFacts(reportedFacts, filingType);
-  const normalizedShareCount = normalizeShareCount(metrics.shareCount);
-  const normalizedNetDebt = normalizeNetDebt(metrics);
+  const merged = {
+    ...DEFAULT_BASELINE,
+    ...aiDraft,
+  };
+
+  const inferredRevenue = Number.isFinite(metrics.revenueLtm) ? metrics.revenueLtm : inferRevenueBaseFromFacts(reportedFacts, filingType);
+  const inferredShareCount = normalizeShareCount(metrics.shareCount);
+  const inferredNetDebt = normalizeNetDebt(metrics);
 
   if (!merged.companyName && filingExtraction?.filingMetadata?.company) merged.companyName = filingExtraction.filingMetadata.company;
-  if (merged.currentRevenue === DEFAULT_BASELINE.currentRevenue && Number.isFinite(normalizedRevenue)) merged.currentRevenue = normalizedRevenue;
-  if (merged.shareCount === DEFAULT_BASELINE.shareCount && Number.isFinite(normalizedShareCount)) merged.shareCount = normalizedShareCount;
-  if (merged.netDebt === DEFAULT_BASELINE.netDebt && Number.isFinite(normalizedNetDebt)) merged.netDebt = normalizedNetDebt;
-  if (merged.taxRate === DEFAULT_BASELINE.taxRate && Number.isFinite(metrics.taxRatePct)) merged.taxRate = metrics.taxRatePct;
-  if (merged.grossMarginStart === DEFAULT_BASELINE.grossMarginStart && Number.isFinite(metrics.grossMarginPct)) {
-    merged.grossMarginStart = metrics.grossMarginPct;
-  }
-  if (merged.operatingMarginStart === DEFAULT_BASELINE.operatingMarginStart && Number.isFinite(metrics.operatingMarginPct)) {
-    merged.operatingMarginStart = metrics.operatingMarginPct;
-  }
-  if (merged.capexPct === DEFAULT_BASELINE.capexPct && Number.isFinite(metrics.capexPctRevenue)) merged.capexPct = metrics.capexPctRevenue;
-  if (merged.daPct === DEFAULT_BASELINE.daPct && Number.isFinite(metrics.daPctRevenue)) merged.daPct = metrics.daPctRevenue;
+  if (!Number.isFinite(Number(aiDraft.currentRevenue)) && Number.isFinite(inferredRevenue)) merged.currentRevenue = inferredRevenue;
+  if (!Number.isFinite(Number(aiDraft.shareCount)) && Number.isFinite(inferredShareCount)) merged.shareCount = inferredShareCount;
+  if (!Number.isFinite(Number(aiDraft.netDebt)) && Number.isFinite(inferredNetDebt)) merged.netDebt = inferredNetDebt;
+  if (!Number.isFinite(Number(aiDraft.taxRate)) && Number.isFinite(metrics.taxRatePct)) merged.taxRate = metrics.taxRatePct;
+  if (!Number.isFinite(Number(aiDraft.grossMarginStart)) && Number.isFinite(metrics.grossMarginPct)) merged.grossMarginStart = metrics.grossMarginPct;
+  if (!Number.isFinite(Number(aiDraft.operatingMarginStart)) && Number.isFinite(metrics.operatingMarginPct)) merged.operatingMarginStart = metrics.operatingMarginPct;
+  if (!Number.isFinite(Number(aiDraft.capexPct)) && Number.isFinite(metrics.capexPctRevenue)) merged.capexPct = metrics.capexPctRevenue;
+  if (!Number.isFinite(Number(aiDraft.daPct)) && Number.isFinite(metrics.daPctRevenue)) merged.daPct = metrics.daPctRevenue;
 
-  if (merged.grossMarginEnd === DEFAULT_BASELINE.grossMarginEnd && merged.grossMarginStart > merged.grossMarginEnd) {
-    merged.grossMarginEnd = merged.grossMarginStart;
-  }
-  if (merged.operatingMarginEnd === DEFAULT_BASELINE.operatingMarginEnd && merged.operatingMarginStart > merged.operatingMarginEnd) {
-    merged.operatingMarginEnd = merged.operatingMarginStart;
+  return normalizeBaseline({
+    ...merged,
+    revenueGrowth: Array.isArray(aiDraft.revenueGrowth) && aiDraft.revenueGrowth.length === 5 ? aiDraft.revenueGrowth : DEFAULT_BASELINE.revenueGrowth,
+  });
+}
+
+function buildDraftedBaselineMeta(aiMeta, filingExtraction, draftedBaseline) {
+  const meta = applySchemaDefaults(aiMeta || {}, DRAFTED_BASELINE_META_SCHEMA);
+  const companyEvidence = filingExtraction?.filingMetadata?.company || filingExtraction?.filingMetadata?.title || '';
+
+  if (draftedBaseline.companyName && !meta.companyName.evidence) {
+    meta.companyName.evidence = companyEvidence;
   }
 
-  return normalizeBaseline(merged);
+  return meta;
 }
 
 function inferRevenueBaseFromFacts(reportedFacts, filingType) {
@@ -304,9 +302,7 @@ function normalizeShareCount(value) {
 }
 
 function normalizeNetDebt(metrics) {
-  if (Number.isFinite(metrics.debt) && Number.isFinite(metrics.cash)) {
-    return metrics.debt - metrics.cash;
-  }
+  if (Number.isFinite(metrics.debt) && Number.isFinite(metrics.cash)) return metrics.debt - metrics.cash;
   if (Number.isFinite(metrics.netDebt)) return metrics.netDebt;
   return null;
 }
@@ -338,26 +334,14 @@ function buildModelSummaryForPrompt(modelPack) {
   };
 }
 
-function buildResult({
-  filingSource,
-  filingExtraction,
-  filingAnalysis,
-  reportPack,
-  modelPack,
-  stageTimings,
-  model,
-  baselineInput,
-  baselineUsed,
-}) {
+function buildResult({ filingSource, filingExtraction, filingAnalysis, draftedBaseline, draftedBaselineMeta, reportPack, modelPack, stageTimings, model }) {
   return {
     generatedAt: new Date().toISOString(),
     model,
     filingMetadata: filingExtraction?.filingMetadata || filingSource.fallbackMetadata,
-    sources: {
-      filing: summarizeSource(filingSource),
-    },
-    baselineInput,
-    baselineUsed,
+    sources: { filing: summarizeSource(filingSource) },
+    draftedBaseline,
+    draftedBaselineMeta,
     executiveSummary: reportPack?.executiveSummary || { headline: '', body: '', bullets: [] },
     businessOverview: filingExtraction?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     keyTakeaways: filingExtraction?.keyTakeaways || [],
@@ -386,6 +370,7 @@ function buildResult({
     confidenceMap: {
       extraction: filingExtraction?.confidenceMap || {},
       analysis: filingAnalysis?.confidenceMap || {},
+      draftedBaseline: draftedBaselineMeta,
     },
     evidenceMap: {
       extraction: filingExtraction?.evidenceMap || {},
@@ -424,9 +409,7 @@ async function callGeminiJson(prompt, temperature = 0.2) {
   }
 
   const text = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('')?.trim();
-  if (!text) {
-    throw new Error('Gemini returned an empty response.');
-  }
+  if (!text) throw new Error('Gemini returned an empty response.');
 
   try {
     return JSON.parse(text);

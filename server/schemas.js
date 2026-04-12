@@ -1,3 +1,22 @@
+export const DRAFTED_BASELINE_META_SCHEMA = {
+  companyName: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  currentRevenue: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  revenueGrowth: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  grossMarginStart: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  grossMarginEnd: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  operatingMarginStart: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  operatingMarginEnd: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  taxRate: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  capexPct: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  daPct: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  nwcPct: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  wacc: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  terminalGrowth: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  shareCount: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  netDebt: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+  exitEbitdaMultiple: { classification: 'review_required', rationale: '', evidence: '', confidence: 'low' },
+};
+
 export const FILING_EXTRACTION_SCHEMA = {
   filingMetadata: {
     company: null,
@@ -44,6 +63,8 @@ export const FILING_EXTRACTION_SCHEMA = {
 };
 
 export const FILING_ANALYSIS_SCHEMA = {
+  draftedBaseline: {},
+  draftedBaselineMeta: DRAFTED_BASELINE_META_SCHEMA,
   whatMattersForModel: {
     summary: '',
     bullets: [],

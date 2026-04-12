@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { baselineGroups, defaultBaseline, horizonLabels } from './assumptions';
+import { baselineFieldLabels, baselineFieldOrder, formatDraftedBaselineValue, horizonLabels } from './assumptions';
 import { sampleCases } from './samples';
 
 const workflowTemplate = [
   { key: 'ingest', label: 'Ingesting filing', note: 'Fetch or normalize the 10-Q or 10-K text.', status: 'pending' },
   { key: 'extract', label: 'Extracting filing facts', note: 'Identify filing metadata, reported base metrics, and disclosure-driven takeaways.', status: 'pending' },
-  { key: 'frame', label: 'Drafting assumptions and model implications', note: 'Translate the filing into proposed assumptions, scenario setup, and valuation context.', status: 'pending' },
-  { key: 'forecast', label: 'Running deterministic model math', note: 'Roll the setup through code-driven forecast and DCF logic.', status: 'pending' },
+  { key: 'frame', label: 'Drafting baseline and model implications', note: 'Draft the full normalized model baseline directly from the filing, then frame scenarios and valuation context.', status: 'pending' },
+  { key: 'forecast', label: 'Running deterministic model math', note: 'Roll the AI-drafted baseline through code-driven forecast and DCF logic.', status: 'pending' },
   { key: 'pack', label: 'Preparing analysis pack', note: 'Assemble the final client-ready sections, tables, and exports.', status: 'pending' },
 ];
 
@@ -15,17 +15,11 @@ const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
 
 function createEmptyFiling() {
-  return {
-    inputMode: 'url',
-    text: '',
-    url: '',
-    title: '',
-  };
+  return { inputMode: 'url', text: '', url: '', title: '' };
 }
 
 export default function App() {
   const [filing, setFiling] = useState(createEmptyFiling());
-  const [baseline, setBaseline] = useState(defaultBaseline);
   const [status, setStatus] = useState({ configured: null, model: null });
   const [workflow, setWorkflow] = useState(workflowTemplate);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -67,7 +61,6 @@ export default function App() {
 
   async function handleReviewFiling() {
     if (!filingReady || isReviewing) return;
-
     setError('');
     setReviewPacket(null);
     setResult(null);
@@ -77,14 +70,12 @@ export default function App() {
       const response = await fetch('/api/review-filing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filing, baseline }),
+        body: JSON.stringify({ filing }),
       });
 
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.message || 'Could not review the filing.');
-
       setReviewPacket(payload);
-      setBaseline(payload.baselineSuggested || baseline);
     } catch (reviewError) {
       setError(reviewError.message || 'Could not review the filing.');
     } finally {
@@ -94,7 +85,6 @@ export default function App() {
 
   async function handleProcess() {
     if (!filingReady || isProcessing) return;
-
     setError('');
     setResult(null);
     setLastCompletedStage('');
@@ -103,7 +93,7 @@ export default function App() {
 
     try {
       await streamProcess(
-        { filing, baseline },
+        { filing },
         {
           onStage: (payload) => {
             setLastCompletedStage(payload.label);
@@ -143,7 +133,6 @@ export default function App() {
 
   function handleReset() {
     setFiling(createEmptyFiling());
-    setBaseline(defaultBaseline);
     setReviewPacket(null);
     setResult(null);
     setError('');
@@ -152,20 +141,8 @@ export default function App() {
     setSelectedScenario('base');
   }
 
-  function handleBaselineChange(key, value) {
-    setBaseline((current) => ({ ...current, [key]: value }));
-  }
-
-  function handleRevenueGrowthChange(index, value) {
-    setBaseline((current) => ({
-      ...current,
-      revenueGrowth: current.revenueGrowth.map((item, itemIndex) => (itemIndex === index ? value : item)),
-    }));
-  }
-
   function loadSample(sample) {
     setFiling(sample.filing);
-    setBaseline(sample.baseline || defaultBaseline);
     setReviewPacket(null);
     setResult(null);
     setError('');
@@ -202,7 +179,7 @@ export default function App() {
             <div className="eyebrow">10-Q / 10-K grounded analysis</div>
             <h1>Filing Model Workbench</h1>
             <p className="hero-copy">
-              Load a single public filing, review the extracted base, and generate a filing-grounded model analysis pack with deterministic scenario math,
+              Load a single public filing, let Gemini draft the normalized model inputs, and generate a filing-grounded analysis pack with deterministic scenario math,
               valuation framing, and a disciplined caveat trail.
             </p>
           </div>
@@ -252,77 +229,23 @@ export default function App() {
                 <button className="secondary-button" onClick={handleReviewFiling} disabled={!filingReady || isReviewing || isProcessing}>
                   {isReviewing ? 'Reviewing filing…' : 'Review filing'}
                 </button>
-                <div className="inline-guidance">
-                  The review step extracts the filing metadata, reported base, and the main disclosure signals before you lock the analysis pack.
-                </div>
+                <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
+                  {isProcessing ? 'Building analysis pack…' : 'Generate analysis pack'}
+                </button>
+              </div>
+
+              <div className="inline-guidance">
+                The filing is the only required input. Gemini drafts the baseline internally, then deterministic math runs from that drafted model input set.
               </div>
 
               {error ? <div className="error-banner">{error}</div> : null}
             </section>
 
-            <section className="card assumptions-card">
-              <div className="section-header compact">
-                <div>
-                  <div className="section-kicker">Step 3</div>
-                  <h2>Analyst baseline assumptions</h2>
-                </div>
-                <div className="card-badge">Editable</div>
-              </div>
-
-              <div className="inline-guidance assumption-guidance">
-                These fields are your reviewable override layer. The filing review backfills explicit reported items where possible, then the AI proposes assumption framing, and deterministic math runs only after that review step.
-              </div>
-
-              {baselineGroups.map((group) => (
-                <div key={group.title} className="assumption-group">
-                  <div className="assumption-group-header">
-                    <div className="assumption-group-title">{group.title}</div>
-                    <div className="assumption-group-copy">{group.description}</div>
-                  </div>
-
-                  {group.revenueGrowth ? (
-                    <div className="growth-grid">
-                      {projectionLabels.map((label, index) => (
-                        <NumericField
-                          key={label}
-                          label={label}
-                          value={baseline.revenueGrowth[index]}
-                          step={0.1}
-                          suffix="%"
-                          onChange={(value) => handleRevenueGrowthChange(index, value)}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="field-grid">
-                      {group.fields.map((field) => (
-                        <InputField
-                          key={field.key}
-                          {...field}
-                          value={baseline[field.key]}
-                          onChange={(value) => handleBaselineChange(field.key, value)}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <div className="action-row model-action-row">
-                <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
-                  {isProcessing ? 'Building analysis pack…' : 'Generate analysis pack'}
-                </button>
-                <div className="inline-guidance">
-                  The final pack stays filing-grounded. Deterministic scenario math remains fully code-driven.
-                </div>
-              </div>
-            </section>
-
             <section className="card workflow-card">
               <div className="section-header compact">
                 <div>
-                  <div className="section-kicker">Step 4</div>
-                  <h2>Processing trail</h2>
+                  <div className="section-kicker">Processing trail</div>
+                  <h2>Workflow status</h2>
                 </div>
                 {isProcessing ? <span className="live-pill">Live</span> : null}
               </div>
@@ -349,9 +272,9 @@ export default function App() {
               reviewPacket ? (
                 <section className="card review-card">
                   <div className="section-kicker">Step 2</div>
-                  <h2>Review extracted filing information</h2>
+                  <h2>Review extracted filing snapshot</h2>
                   <p className="review-copy">
-                    This preview isolates the filing metadata, reported base, derived read-through, and the disclosure set that will drive the drafted assumption layer.
+                    This preview isolates the filing metadata, reported base, and the internally drafted model baseline that will feed the deterministic model.
                   </p>
 
                   <div className="report-header-grid review-meta-grid">
@@ -376,76 +299,19 @@ export default function App() {
                     ))}
                   </div>
 
-                  {(reviewPacket.derivedMetrics || []).length ? (
-                    <div className="table-wrap compact-spacing">
-                      <table className="delta-table numeric-table">
-                        <thead>
-                          <tr>
-                            <th>Derived metric</th>
-                            <th>Value</th>
-                            <th>Logic</th>
-                            <th>Evidence</th>
-                            <th>Confidence</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {reviewPacket.derivedMetrics.map((item, index) => (
-                            <tr key={`${item.metric}-${index}`}>
-                              <td className="strong-cell">{item.metric}</td>
-                              <td>{item.value}</td>
-                              <td>{item.logic}</td>
-                              <td>{item.evidence}</td>
-                              <td><ConfidencePill confidence={item.confidence} /></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
-
-                  <div className="review-columns two-column-grid">
-                    <div className="split-panel">
-                      <div className="split-header">Key filing takeaways</div>
-                      <div className="stack-list">
-                        {sortByClassificationAndConfidence(reviewPacket.keyTakeaways).slice(0, 6).map((item, index) => (
-                          <div key={`${item.title}-${index}`} className="stack-item">
-                            <div className="stack-text">{item.title}</div>
-                            <div className="stack-support">{item.summary}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="split-panel">
-                      <div className="split-header">Missing inputs to review</div>
-                      <div className="stack-list">
-                        {(reviewPacket.missingBaseInputs || []).length ? (
-                          reviewPacket.missingBaseInputs.map((item, index) => (
-                            <div key={`${item.field}-${index}`} className="stack-item">
-                              <div className="stack-text">{item.field}</div>
-                              <div className="stack-support">{item.reason}</div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="stack-item">
-                            <div className="stack-text">No major gaps surfaced</div>
-                            <div className="stack-support">The filing appears to provide enough base detail for a practical first-pass model frame.</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
+                  <DraftedBaselineTable draftedBaseline={reviewPacket.draftedBaseline} draftedBaselineMeta={reviewPacket.draftedBaselineMeta} compact />
                 </section>
               ) : (
                 <section className="card empty-state">
                   <div className="section-kicker">Output</div>
                   <h2>Filing-grounded work product appears here</h2>
                   <p>
-                    Review the filing first, then generate a client-ready pack organized around business overview, model drivers, scenario analysis, valuation framing, and risks.
+                    Load a filing, optionally review the extracted snapshot, then generate a client-ready pack organized around business overview, drafted model inputs, scenario analysis, valuation framing, and risks.
                   </p>
                   <div className="empty-grid">
                     <div className="empty-chip">Executive summary</div>
                     <div className="empty-chip">Business overview</div>
-                    <div className="empty-chip">Reported base</div>
+                    <div className="empty-chip">Drafted model inputs</div>
                     <div className="empty-chip">Scenario analysis</div>
                     <div className="empty-chip">Valuation summary</div>
                     <div className="empty-chip">Key risks</div>
@@ -490,9 +356,7 @@ export default function App() {
                   <div className="executive-headline">{result.executiveSummary?.headline}</div>
                   <p className="executive-body">{result.executiveSummary?.body}</p>
                   <ul className="bullet-list">
-                    {(result.executiveSummary?.bullets || []).map((bullet) => (
-                      <li key={bullet}>{bullet}</li>
-                    ))}
+                    {(result.executiveSummary?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
                   </ul>
                 </SectionCard>
 
@@ -533,9 +397,7 @@ export default function App() {
                 <SectionCard title="What matters for the model" kicker="4" defaultOpen>
                   <p className="executive-body">{result.whatMattersForModel?.summary}</p>
                   <ul className="bullet-list compact-list">
-                    {(result.whatMattersForModel?.bullets || []).map((bullet) => (
-                      <li key={bullet}>{bullet}</li>
-                    ))}
+                    {(result.whatMattersForModel?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
                   </ul>
 
                   <div className="takeaway-grid compact-spacing">
@@ -556,18 +418,11 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Reported base and proposed assumptions" kicker="5" defaultOpen>
-                  <p className="executive-body">{result.reportedBase?.summary}</p>
-
-                  <div className="facts-grid">
-                    {(result.reportedBase?.reportedFacts || []).slice(0, 8).map((fact, index) => (
-                      <div key={`${fact.metric}-${index}`} className="fact-card">
-                        <div className="fact-metric">{fact.metric}</div>
-                        <div className="fact-value">{fact.valueText}</div>
-                        <div className="fact-foot">{fact.category}</div>
-                      </div>
-                    ))}
-                  </div>
+                <SectionCard title="AI-drafted model assumptions" kicker="5" defaultOpen>
+                  <p className="executive-body">
+                    Gemini drafts the normalized model baseline directly from the filing. Deterministic forecast and valuation math run from this baseline, with uncertainty kept visible.
+                  </p>
+                  <DraftedBaselineTable draftedBaseline={result.draftedBaseline} draftedBaselineMeta={result.draftedBaselineMeta} />
 
                   {(result.proposedAssumptions || []).length ? (
                     <div className="table-wrap compact-spacing">
@@ -589,50 +444,12 @@ export default function App() {
                               <td>{row.proposal}</td>
                               <td>{row.rationale}</td>
                               <td>{row.evidence}</td>
-                              <td><ClassificationPill classification={row.reviewRequired ? 'review_required' : 'proposed'} /></td>
+                              <td><ClassificationPill classification={row.classification || (row.reviewRequired ? 'review_required' : 'proposed')} /></td>
                               <td><ConfidencePill confidence={row.confidence} /></td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
-                    </div>
-                  ) : null}
-
-                  <div className="table-wrap compact-spacing">
-                    <table className="delta-table assumption-table numeric-table">
-                      <thead>
-                        <tr>
-                          <th>Field</th>
-                          <th>Analyst baseline</th>
-                          <th>Filing read-through</th>
-                          <th>Model implication</th>
-                          <th>Status</th>
-                          <th>Confidence</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(result.assumptionReview || []).map((row, index) => (
-                          <tr key={`${row.field}-${index}`}>
-                            <td className="strong-cell">{row.field}</td>
-                            <td>{row.currentBaseline}</td>
-                            <td>{row.filingReadThrough}</td>
-                            <td>{row.modelImplication}</td>
-                            <td><ClassificationPill classification={row.status} /></td>
-                            <td><ConfidencePill confidence={row.confidence} /></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-
-                  {(result.missingBaseInputs || []).length ? (
-                    <div className="missing-inputs-card compact-spacing">
-                      <div className="section-subtitle">Open items still requiring judgment</div>
-                      <ul className="bullet-list compact-list">
-                        {result.missingBaseInputs.map((item, index) => (
-                          <li key={`${item.field}-${index}`}><strong>{item.field}:</strong> {item.reason}</li>
-                        ))}
-                      </ul>
                     </div>
                   ) : null}
                 </SectionCard>
@@ -644,9 +461,7 @@ export default function App() {
                         <div className="scenario-label">{capitalize(scenarioKey)} case</div>
                         <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
                         <ul className="bullet-list compact-list inside-card">
-                          {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
+                          {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
                         </ul>
                       </article>
                     ))}
@@ -655,12 +470,7 @@ export default function App() {
                   <div className="section-controls compact-spacing">
                     <div className="scenario-toggle horizontal-toggle">
                       {scenarioKeys.map((scenarioKey) => (
-                        <button
-                          key={scenarioKey}
-                          className={selectedScenario === scenarioKey ? 'mode-button active' : 'mode-button'}
-                          onClick={() => setSelectedScenario(scenarioKey)}
-                          type="button"
-                        >
+                        <button key={scenarioKey} className={selectedScenario === scenarioKey ? 'mode-button active' : 'mode-button'} onClick={() => setSelectedScenario(scenarioKey)} type="button">
                           {capitalize(scenarioKey)}
                         </button>
                       ))}
@@ -673,18 +483,14 @@ export default function App() {
                       <thead>
                         <tr>
                           <th>Metric</th>
-                          {projectionLabels.map((label) => (
-                            <th key={label} className="numeric-cell">{label}</th>
-                          ))}
+                          {projectionLabels.map((label) => <th key={label} className="numeric-cell">{label}</th>)}
                         </tr>
                       </thead>
                       <tbody>
                         {forecastMetricRows(selectedScenarioModel).map((row) => (
                           <tr key={row.label}>
                             <td className="strong-cell">{row.label}</td>
-                            {row.values.map((value, index) => (
-                              <td key={`${row.label}-${index}`} className="numeric-cell">{value}</td>
-                            ))}
+                            {row.values.map((value, index) => <td key={`${row.label}-${index}`} className="numeric-cell">{value}</td>)}
                           </tr>
                         ))}
                       </tbody>
@@ -695,18 +501,14 @@ export default function App() {
                 <SectionCard title="Valuation summary" kicker="7" defaultOpen>
                   <p className="executive-body">{result.valuationSummary?.summary}</p>
                   <ul className="bullet-list compact-list">
-                    {(result.valuationSummary?.bullets || []).map((bullet) => (
-                      <li key={bullet}>{bullet}</li>
-                    ))}
+                    {(result.valuationSummary?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
                   </ul>
 
                   {(result.valuationSummary?.scenarioStructure || []).length ? (
                     <div className="missing-inputs-card compact-spacing">
                       <div className="section-subtitle">Scenario structure</div>
                       <ul className="bullet-list compact-list">
-                        {result.valuationSummary.scenarioStructure.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
+                        {result.valuationSummary.scenarioStructure.map((item) => <li key={item}>{item}</li>)}
                       </ul>
                     </div>
                   ) : null}
@@ -755,19 +557,15 @@ export default function App() {
                       <table className="sensitivity-table numeric-table">
                         <thead>
                           <tr>
-                            <th>Terminal growth \ WACC</th>
-                            {result.modelPack.baseSensitivity.waccValues.map((value) => (
-                              <th key={value} className="numeric-cell">{formatPercent(value)}</th>
-                            ))}
+                            <th>Terminal growth \\ WACC</th>
+                            {result.modelPack.baseSensitivity.waccValues.map((value) => <th key={value} className="numeric-cell">{formatPercent(value)}</th>)}
                           </tr>
                         </thead>
                         <tbody>
                           {result.modelPack.baseSensitivity.terminalGrowthValues.map((terminalValue, rowIndex) => (
                             <tr key={terminalValue}>
                               <td className="strong-cell">{formatPercent(terminalValue)}</td>
-                              {result.modelPack.baseSensitivity.matrix[rowIndex].map((cell, cellIndex) => (
-                                <td key={`${terminalValue}-${cellIndex}`} className="numeric-cell">{formatMoney(cell)}</td>
-                              ))}
+                              {result.modelPack.baseSensitivity.matrix[rowIndex].map((cell, cellIndex) => <td key={`${terminalValue}-${cellIndex}`} className="numeric-cell">{formatMoney(cell)}</td>)}
                             </tr>
                           ))}
                         </tbody>
@@ -778,16 +576,8 @@ export default function App() {
 
                 <SectionCard title="Key risks and watch items" kicker="9" defaultOpen>
                   <div className="two-column-grid detail-grid">
-                    <InfoList
-                      title="Key risks"
-                      items={(result.risksAndWatchItems || []).filter((item) => item.type === 'risk').map((item) => `${item.item}: ${item.whyItMatters}`)}
-                      emptyLabel="No major risks were isolated cleanly from the filing text."
-                    />
-                    <InfoList
-                      title="Watch items"
-                      items={(result.risksAndWatchItems || []).filter((item) => item.type === 'watch_item').map((item) => `${item.item}: ${item.whyItMatters}`)}
-                      emptyLabel="No distinct watch items were isolated beyond the core risk set."
-                    />
+                    <InfoList title="Key risks" items={(result.risksAndWatchItems || []).filter((item) => item.type === 'risk').map((item) => `${item.item}: ${item.whyItMatters}`)} emptyLabel="No major risks were isolated cleanly from the filing text." />
+                    <InfoList title="Watch items" items={(result.risksAndWatchItems || []).filter((item) => item.type === 'watch_item').map((item) => `${item.item}: ${item.whyItMatters}`)} emptyLabel="No distinct watch items were isolated beyond the core risk set." />
                   </div>
                 </SectionCard>
 
@@ -826,9 +616,7 @@ export default function App() {
                       <p className="executive-body">{result.sourceAppendix.methodology}</p>
                       {(result.sourceAppendix.caveats || []).length ? (
                         <ul className="bullet-list compact-list">
-                          {result.sourceAppendix.caveats.map((item) => (
-                            <li key={item}>{item}</li>
-                          ))}
+                          {result.sourceAppendix.caveats.map((item) => <li key={item}>{item}</li>)}
                         </ul>
                       ) : null}
                     </div>
@@ -840,6 +628,41 @@ export default function App() {
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+function DraftedBaselineTable({ draftedBaseline, draftedBaselineMeta, compact = false }) {
+  if (!draftedBaseline) return null;
+  return (
+    <div className="table-wrap compact-spacing">
+      <table className={`delta-table assumption-table numeric-table ${compact ? 'compact-table' : ''}`}>
+        <thead>
+          <tr>
+            <th>Field</th>
+            <th>Drafted value</th>
+            <th>Classification</th>
+            <th>Rationale</th>
+            <th>Evidence</th>
+            <th>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {baselineFieldOrder.map((field) => {
+            const meta = draftedBaselineMeta?.[field] || {};
+            return (
+              <tr key={field}>
+                <td className="strong-cell">{baselineFieldLabels[field] || field}</td>
+                <td>{formatDraftedBaselineValue(field, draftedBaseline[field])}</td>
+                <td><ClassificationPill classification={meta.classification || 'review_required'} /></td>
+                <td>{meta.rationale || '—'}</td>
+                <td>{meta.evidence || '—'}</td>
+                <td><ConfidencePill confidence={meta.confidence || 'low'} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -858,63 +681,16 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
       </div>
 
       <div className="mini-switch">
-        <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">
-          Load URL
-        </button>
-        <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">
-          Paste text
-        </button>
+        <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">Load URL</button>
+        <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">Paste text</button>
       </div>
 
       {document.inputMode === 'url' ? (
-        <input
-          className="text-input"
-          type="url"
-          placeholder={urlPlaceholder}
-          value={document.url || ''}
-          onChange={(event) => onChange({ ...document, url: event.target.value })}
-        />
+        <input className="text-input" type="url" placeholder={urlPlaceholder} value={document.url || ''} onChange={(event) => onChange({ ...document, url: event.target.value })} />
       ) : (
-        <textarea
-          className="document-textarea"
-          placeholder={textPlaceholder}
-          value={document.text || ''}
-          onChange={(event) => onChange({ ...document, text: event.target.value })}
-        />
+        <textarea className="document-textarea" placeholder={textPlaceholder} value={document.text || ''} onChange={(event) => onChange({ ...document, text: event.target.value })} />
       )}
     </div>
-  );
-}
-
-function InputField({ label, type, value, onChange, step, suffix, placeholder }) {
-  const isText = type === 'text';
-  return (
-    <label className="field-card">
-      <span>{label}</span>
-      <div className="field-input-wrap">
-        <input
-          className="text-input small"
-          type={type}
-          step={step}
-          placeholder={placeholder}
-          value={value}
-          onChange={(event) => onChange(isText ? event.target.value : toNumber(event.target.value))}
-        />
-        {suffix ? <em>{suffix}</em> : null}
-      </div>
-    </label>
-  );
-}
-
-function NumericField({ label, value, onChange, step = 0.1, suffix }) {
-  return (
-    <label className="field-card compact-card">
-      <span>{label}</span>
-      <div className="field-input-wrap">
-        <input className="text-input small" type="number" step={step} value={value} onChange={(event) => onChange(toNumber(event.target.value))} />
-        {suffix ? <em>{suffix}</em> : null}
-      </div>
-    </label>
   );
 }
 
@@ -953,17 +729,7 @@ function InfoList({ title, items, emptyLabel }) {
     <div className="split-panel">
       <div className="split-header">{title}</div>
       <div className="stack-list">
-        {items.length ? (
-          items.map((item, index) => (
-            <div key={`${title}-${index}`} className="stack-item">
-              <div className="stack-support">{item}</div>
-            </div>
-          ))
-        ) : (
-          <div className="stack-item">
-            <div className="stack-support">{emptyLabel}</div>
-          </div>
-        )}
+        {items.length ? items.map((item, index) => <div key={`${title}-${index}`} className="stack-item"><div className="stack-support">{item}</div></div>) : <div className="stack-item"><div className="stack-support">{emptyLabel}</div></div>}
       </div>
     </div>
   );
@@ -996,12 +762,7 @@ function ValuationCard({ title, valuation, tone }) {
 
 function StatusPill({ configured, model }) {
   const label = configured ? 'Model engine ready' : configured === false ? 'Set GEMINI_API_KEY' : 'Checking model config';
-  return (
-    <div className={`status-pill ${configured ? 'ready' : configured === false ? 'warning' : ''}`}>
-      <span>{label}</span>
-      {model ? <strong>{model}</strong> : null}
-    </div>
-  );
+  return <div className={`status-pill ${configured ? 'ready' : configured === false ? 'warning' : ''}`}><span>{label}</span>{model ? <strong>{model}</strong> : null}</div>;
 }
 
 function ConfidencePill({ confidence = 'medium' }) {
@@ -1013,40 +774,21 @@ function PriorityPill({ priority = 'medium' }) {
 }
 
 function MetaPill({ label, value }) {
-  return (
-    <div className="meta-pill">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+  return <div className="meta-pill"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function StatTile({ label, value }) {
-  return (
-    <div className="stat-tile">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+  return <div className="stat-tile"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function ValuationLine({ label, value }) {
-  return (
-    <div className="valuation-line">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
+  return <div className="valuation-line"><span>{label}</span><strong>{value}</strong></div>;
 }
 
 function renderStatusLabel(status) {
   if (status === 'complete') return 'Done';
   if (status === 'active') return 'Running';
   return 'Queued';
-}
-
-function sortByConfidence(items) {
-  return [...(items || [])].sort((a, b) => (confidenceOrder[b.confidence] || 0) - (confidenceOrder[a.confidence] || 0));
 }
 
 function sortByClassificationAndConfidence(items) {
@@ -1108,10 +850,7 @@ function forecastMetricRows(scenarioModel) {
     { label: 'Free cash flow', key: 'freeCashFlow', format: 'money' },
   ];
 
-  return rows.map((row) => ({
-    label: row.label,
-    values: (scenarioModel?.forecastTable || []).map((item) => (row.format === 'percent' ? formatPercent(item[row.key]) : formatMoney(item[row.key]))),
-  }));
+  return rows.map((row) => ({ label: row.label, values: (scenarioModel?.forecastTable || []).map((item) => (row.format === 'percent' ? formatPercent(item[row.key]) : formatMoney(item[row.key]))) }));
 }
 
 function buildProjectionLabels(metadata, count = horizonLabels.length) {
@@ -1128,37 +867,28 @@ function extractAnchorYear(metadata) {
 
 function buildCopyPayload(kind, result, projectionHeaders) {
   if (kind === 'summary') {
-    return [
-      result.executiveSummary?.headline,
-      result.executiveSummary?.body,
-      ...(result.executiveSummary?.bullets || []).map((bullet) => `• ${bullet}`),
-    ].filter(Boolean).join('\n');
+    return [result.executiveSummary?.headline, result.executiveSummary?.body, ...(result.executiveSummary?.bullets || []).map((bullet) => `• ${bullet}`)].filter(Boolean).join('\n');
   }
-
   return buildForecastTsv(result, projectionHeaders);
 }
 
 function buildCsvPayload(kind, result, projectionHeaders) {
-  if (kind === 'forecast') {
-    return { filename: 'filing-forecast.csv', content: buildForecastCsv(result, projectionHeaders) };
-  }
-  if (kind === 'valuation') {
-    return { filename: 'filing-valuation.csv', content: buildValuationCsv(result) };
-  }
-  return { filename: 'assumption-review.csv', content: buildAssumptionCsv(result) };
+  if (kind === 'forecast') return { filename: 'filing-forecast.csv', content: buildForecastCsv(result, projectionHeaders) };
+  if (kind === 'valuation') return { filename: 'filing-valuation.csv', content: buildValuationCsv(result) };
+  return { filename: 'drafted-assumptions.csv', content: buildAssumptionCsv(result) };
 }
 
 function buildAssumptionCsv(result) {
-  const lines = ['Field,Analyst baseline,Filing read-through,Model implication,Status,Evidence,Confidence'];
-  (result.assumptionReview || []).forEach((row) => {
+  const lines = ['Field,Drafted value,Classification,Rationale,Evidence,Confidence'];
+  baselineFieldOrder.forEach((field) => {
+    const meta = result.draftedBaselineMeta?.[field] || {};
     lines.push([
-      row.field,
-      row.currentBaseline,
-      row.filingReadThrough,
-      row.modelImplication,
-      row.status,
-      row.evidence,
-      row.confidence,
+      baselineFieldLabels[field] || field,
+      formatDraftedBaselineValue(field, result.draftedBaseline?.[field]),
+      meta.classification || 'review_required',
+      meta.rationale || '',
+      meta.evidence || '',
+      meta.confidence || 'low',
     ].map(escapeCsv).join(','));
   });
   return lines.join('\n');
@@ -1178,14 +908,7 @@ function buildValuationCsv(result) {
   const lines = ['Scenario,Enterprise value,Equity value,Value per share,WACC,Terminal growth'];
   scenarioKeys.forEach((key) => {
     const valuation = result.modelPack.scenarios[key].valuation;
-    lines.push([
-      capitalize(key),
-      valuation.enterpriseValue,
-      valuation.equityValue,
-      valuation.valuePerShare,
-      valuation.wacc,
-      valuation.terminalGrowth,
-    ].map(escapeCsv).join(','));
+    lines.push([capitalize(key), valuation.enterpriseValue, valuation.equityValue, valuation.valuePerShare, valuation.wacc, valuation.terminalGrowth].map(escapeCsv).join(','));
   });
   return lines.join('\n');
 }
@@ -1202,9 +925,7 @@ function buildForecastTsv(result, projectionHeaders) {
 
 function escapeCsv(value) {
   const stringValue = String(value ?? '');
-  if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) {
-    return `"${stringValue.replace(/"/g, '""')}"`;
-  }
+  if (stringValue.includes(',') || stringValue.includes('"') || stringValue.includes('\n')) return `"${stringValue.replace(/"/g, '""')}"`;
   return stringValue;
 }
 
@@ -1216,27 +937,17 @@ function copyLabel(kind) {
 function downloadLabel(kind) {
   if (kind === 'forecast') return 'Forecast CSV downloaded';
   if (kind === 'valuation') return 'Valuation CSV downloaded';
-  return 'Assumption review CSV downloaded';
-}
-
-function toNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return 'Drafted assumptions CSV downloaded';
 }
 
 async function streamProcess(payload, handlers) {
   const response = await fetch('/api/process', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(payload),
   });
 
-  if (!response.ok || !response.body) {
-    throw new Error('Could not start the filing analysis workflow.');
-  }
+  if (!response.ok || !response.body) throw new Error('Could not start the filing analysis workflow.');
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -1257,7 +968,6 @@ async function streamProcess(payload, handlers) {
       const event = eventLine.replace('event:', '').trim();
       const payloadText = dataLine.replace('data:', '').trim();
       const data = JSON.parse(payloadText);
-
       if (event === 'stage') handlers.onStage?.(data);
       if (event === 'result') handlers.onResult?.(data);
       if (event === 'error') handlers.onError?.(data);
