@@ -1,6 +1,6 @@
 # Filing Model Workbench
 
-A filing-grounded finance workspace for loading a single public-company 10-Q or 10-K and generating a client-ready model analysis pack.
+A filing-grounded finance workspace for loading a single public-company 10-Q or 10-K and generating a premium model-first analysis pack.
 
 ## Product framing
 
@@ -8,31 +8,33 @@ This v1 release is intentionally narrow.
 
 It focuses on one filing, not a transcript workflow.
 The filing is the factual anchor.
-The output is meant to feel like disciplined banker or senior-analyst work product rather than a generic AI summary.
+The output is designed to feel like disciplined banker or senior-analyst work product, with model and valuation outputs leading the experience rather than sitting behind narrative sections.
 
 ## v1 workflow
 
 1. load a **10-Q or 10-K** by URL or pasted text
 2. let Gemini extract the filing and draft the normalized model inputs
-3. optionally review the extracted filing snapshot
-4. generate the analysis pack
+3. generate a model-first filing-grounded analysis pack
+4. optionally review the supporting filing snapshot and appendix detail
 
 ## What the system produces
 
-The final pack is organized as:
+The final pack is organized in a model-first hierarchy:
 
-1. Executive summary
-2. Business overview from filing
-3. Key filing takeaways
-4. What matters for the model
-5. AI-drafted model assumptions
-6. Scenario analysis
-7. Valuation summary
-8. Key sensitivities
-9. Key risks and watch items
-10. Review flags
-11. Analyst checklist
-12. Source appendix
+1. Company and filing context strip
+2. Model headline summary
+3. Scenario overview
+4. Valuation frame
+5. Base-case enterprise value sensitivity
+6. Valuation bridge and key deltas
+7. AI-drafted model assumptions
+8. Executive summary
+9. Business overview from filing
+10. Key filing takeaways
+11. What matters for the model
+12. Key sensitivities
+13. Key risks and watch items
+14. Review flags / checklist / source appendix
 
 ## What the backend does
 
@@ -99,10 +101,10 @@ These are loaded by URL from SEC EDGAR rather than fabricated example content.
 
 ## File structure
 
-- `src/App.jsx` — filing-only interface, snapshot review, drafted assumptions display, report rendering, export actions
+- `src/App.jsx` — filing-only interface, model-first report hierarchy, premium metric-led shell, export actions
 - `src/assumptions.js` — shared drafted-baseline field metadata and formatting helpers
 - `src/samples.js` — real SEC public example filings
-- `src/styles.css` — restrained institutional-finance UI styling
+- `src/styles.css` — premium navy / gold / neutral presentation system and table styling
 - `server/index.js` — review endpoint, SSE processing pipeline, drafted-baseline assembly, result payload
 - `server/promptSchemas.js` — filing extraction, drafted-baseline, and report-formatting prompts
 - `server/sourceNormalization.js` — filing URL/text ingestion and normalization
