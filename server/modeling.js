@@ -1,24 +1,38 @@
 const HORIZON = 5;
-const YEAR_LABELS = Array.from({ length: HORIZON }, (_, index) => `FY+${index + 1}`);
+export const YEAR_LABELS = Array.from({ length: HORIZON }, (_, index) => `FY+${index + 1}`);
 
-const DEFAULT_BASELINE = {
+export const DEFAULT_BASELINE = {
   companyName: '',
   unitLabel: 'USDm',
   currentRevenue: 1000,
-  revenueGrowth: [10, 8, 7, 6, 5],
-  grossMarginStart: 60,
-  grossMarginEnd: 62,
-  operatingMarginStart: 18,
-  operatingMarginEnd: 20,
+  revenueGrowth: [8, 7, 6, 5, 4],
+  grossMarginStart: 55,
+  grossMarginEnd: 56.5,
+  operatingMarginStart: 16,
+  operatingMarginEnd: 18,
   taxRate: 21,
   capexPct: 3.5,
   daPct: 2.0,
   nwcPct: 1.0,
   wacc: 9.0,
-  terminalGrowth: 3.0,
+  terminalGrowth: 2.5,
   shareCount: 100,
   netDebt: 0,
   exitEbitdaMultiple: 12,
+};
+
+export const ZERO_SCENARIO_ADJUSTMENTS = {
+  revenueGrowthDeltaPpts: Array(HORIZON).fill(0),
+  grossMarginDeltaBps: Array(HORIZON).fill(0),
+  operatingMarginDeltaBps: Array(HORIZON).fill(0),
+  capexPctDeltaBps: Array(HORIZON).fill(0),
+  daPctDeltaBps: Array(HORIZON).fill(0),
+  nwcPctDeltaBps: Array(HORIZON).fill(0),
+  taxRateDeltaBps: Array(HORIZON).fill(0),
+  waccDeltaBps: 0,
+  terminalGrowthDeltaBps: 0,
+  summary: '',
+  keyAssumptions: [],
 };
 
 export function normalizeBaseline(input = {}) {
@@ -47,13 +61,13 @@ export function normalizeBaseline(input = {}) {
 
 export function normalizeScenarioAdjustments(input = {}) {
   return {
-    revenueGrowthDeltaPpts: normalizeArray(input.revenueGrowthDeltaPpts, Array(HORIZON).fill(0), HORIZON, -10, 10),
-    grossMarginDeltaBps: normalizeArray(input.grossMarginDeltaBps, Array(HORIZON).fill(0), HORIZON, -1000, 1000),
-    operatingMarginDeltaBps: normalizeArray(input.operatingMarginDeltaBps, Array(HORIZON).fill(0), HORIZON, -1200, 1200),
-    capexPctDeltaBps: normalizeArray(input.capexPctDeltaBps, Array(HORIZON).fill(0), HORIZON, -800, 800),
-    daPctDeltaBps: normalizeArray(input.daPctDeltaBps, Array(HORIZON).fill(0), HORIZON, -500, 500),
-    nwcPctDeltaBps: normalizeArray(input.nwcPctDeltaBps, Array(HORIZON).fill(0), HORIZON, -500, 500),
-    taxRateDeltaBps: normalizeArray(input.taxRateDeltaBps, Array(HORIZON).fill(0), HORIZON, -500, 500),
+    revenueGrowthDeltaPpts: normalizeArray(input.revenueGrowthDeltaPpts, ZERO_SCENARIO_ADJUSTMENTS.revenueGrowthDeltaPpts, HORIZON, -10, 10),
+    grossMarginDeltaBps: normalizeArray(input.grossMarginDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.grossMarginDeltaBps, HORIZON, -1000, 1000),
+    operatingMarginDeltaBps: normalizeArray(input.operatingMarginDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.operatingMarginDeltaBps, HORIZON, -1200, 1200),
+    capexPctDeltaBps: normalizeArray(input.capexPctDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.capexPctDeltaBps, HORIZON, -800, 800),
+    daPctDeltaBps: normalizeArray(input.daPctDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.daPctDeltaBps, HORIZON, -500, 500),
+    nwcPctDeltaBps: normalizeArray(input.nwcPctDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.nwcPctDeltaBps, HORIZON, -500, 500),
+    taxRateDeltaBps: normalizeArray(input.taxRateDeltaBps, ZERO_SCENARIO_ADJUSTMENTS.taxRateDeltaBps, HORIZON, -500, 500),
     waccDeltaBps: clampNumber(input.waccDeltaBps, 0, -200, 200),
     terminalGrowthDeltaBps: clampNumber(input.terminalGrowthDeltaBps, 0, -100, 100),
     summary: String(input.summary || '').trim(),
@@ -62,11 +76,20 @@ export function normalizeScenarioAdjustments(input = {}) {
 }
 
 export function buildModelPack({ baseline, scenarioAdjustments }) {
-  const baseScenario = buildScenarioModel('Base', baseline, normalizeScenarioAdjustments(scenarioAdjustments.base));
-  const upsideScenario = buildScenarioModel('Upside', baseline, normalizeScenarioAdjustments(scenarioAdjustments.upside));
-  const downsideScenario = buildScenarioModel('Downside', baseline, normalizeScenarioAdjustments(scenarioAdjustments.downside));
+  const normalizedAdjustments = {
+    prior: normalizeScenarioAdjustments(ZERO_SCENARIO_ADJUSTMENTS),
+    base: normalizeScenarioAdjustments(scenarioAdjustments.base),
+    upside: normalizeScenarioAdjustments(scenarioAdjustments.upside),
+    downside: normalizeScenarioAdjustments(scenarioAdjustments.downside),
+  };
+
+  const priorView = buildScenarioModel('Prior View', baseline, normalizedAdjustments.prior);
+  const baseScenario = buildScenarioModel('Base', baseline, normalizedAdjustments.base);
+  const upsideScenario = buildScenarioModel('Upside', baseline, normalizedAdjustments.upside);
+  const downsideScenario = buildScenarioModel('Downside', baseline, normalizedAdjustments.downside);
 
   const valuationSummary = {
+    prior: priorView.valuation,
     base: baseScenario.valuation,
     upside: upsideScenario.valuation,
     downside: downsideScenario.valuation,
@@ -80,14 +103,17 @@ export function buildModelPack({ baseline, scenarioAdjustments }) {
   return {
     years: YEAR_LABELS,
     baseline,
+    priorView,
     scenarios: {
       base: baseScenario,
       upside: upsideScenario,
       downside: downsideScenario,
     },
-    comparison: buildScenarioComparison(baseScenario, upsideScenario, downsideScenario),
+    comparison: buildScenarioComparison(baseScenario, upsideScenario, downsideScenario, priorView),
     valuationSummary,
+    valuationBridge: buildValuationBridge(baseline, normalizedAdjustments.base),
     baseSensitivity: buildDcfSensitivity(baseScenario),
+    changeVsPrior: buildChangeVsPrior(priorView, baseScenario),
   };
 }
 
@@ -107,7 +133,7 @@ function buildScenarioModel(label, baseline, adjustment) {
   const terminalGrowth = clamp(baseline.terminalGrowth + adjustment.terminalGrowthDeltaBps / 100, -2, Math.min(6, wacc - 1));
 
   let priorRevenue = baseline.currentRevenue;
-  let priorWorkingCapital = priorRevenue * (nwcPctPath[0] / 100);
+  let priorWorkingCapital = baseline.currentRevenue * (baseline.nwcPct / 100);
 
   const forecastTable = YEAR_LABELS.map((year, index) => {
     const revenue = priorRevenue * (1 + revenueGrowth[index] / 100);
@@ -213,7 +239,7 @@ function runDcf({ forecastTable, wacc, terminalGrowth, shareCount, netDebt, exit
   };
 }
 
-function buildScenarioComparison(base, upside, downside) {
+function buildScenarioComparison(base, upside, downside, prior) {
   const finalBase = base.forecastTable.at(-1);
   const finalUpside = upside.forecastTable.at(-1);
   const finalDownside = downside.forecastTable.at(-1);
@@ -221,6 +247,7 @@ function buildScenarioComparison(base, upside, downside) {
   return [
     {
       metric: 'FY+1 revenue growth',
+      prior: prior.forecastTable[0]?.revenueGrowth,
       base: base.forecastTable[0]?.revenueGrowth,
       upside: upside.forecastTable[0]?.revenueGrowth,
       downside: downside.forecastTable[0]?.revenueGrowth,
@@ -228,6 +255,7 @@ function buildScenarioComparison(base, upside, downside) {
     },
     {
       metric: 'FY+5 revenue',
+      prior: prior.forecastTable.at(-1)?.revenue,
       base: finalBase?.revenue,
       upside: finalUpside?.revenue,
       downside: finalDownside?.revenue,
@@ -235,6 +263,7 @@ function buildScenarioComparison(base, upside, downside) {
     },
     {
       metric: 'FY+5 operating margin',
+      prior: prior.forecastTable.at(-1)?.operatingMargin,
       base: finalBase?.operatingMargin,
       upside: finalUpside?.operatingMargin,
       downside: finalDownside?.operatingMargin,
@@ -242,6 +271,7 @@ function buildScenarioComparison(base, upside, downside) {
     },
     {
       metric: 'FY+5 free cash flow',
+      prior: prior.forecastTable.at(-1)?.freeCashFlow,
       base: finalBase?.freeCashFlow,
       upside: finalUpside?.freeCashFlow,
       downside: finalDownside?.freeCashFlow,
@@ -249,6 +279,7 @@ function buildScenarioComparison(base, upside, downside) {
     },
     {
       metric: 'Implied enterprise value',
+      prior: prior.valuation.enterpriseValue,
       base: base.valuation.enterpriseValue,
       upside: upside.valuation.enterpriseValue,
       downside: downside.valuation.enterpriseValue,
@@ -256,12 +287,116 @@ function buildScenarioComparison(base, upside, downside) {
     },
     {
       metric: 'Implied value per share',
+      prior: prior.valuation.valuePerShare,
       base: base.valuation.valuePerShare,
       upside: upside.valuation.valuePerShare,
       downside: downside.valuation.valuePerShare,
       format: 'perShare',
     },
   ];
+}
+
+function buildChangeVsPrior(priorView, baseScenario) {
+  const priorFinal = priorView.forecastTable.at(-1);
+  const baseFinal = baseScenario.forecastTable.at(-1);
+  return [
+    {
+      metric: 'FY+1 revenue growth',
+      prior: priorView.forecastTable[0]?.revenueGrowth,
+      revised: baseScenario.forecastTable[0]?.revenueGrowth,
+      delta: (baseScenario.forecastTable[0]?.revenueGrowth ?? 0) - (priorView.forecastTable[0]?.revenueGrowth ?? 0),
+      format: 'percent',
+    },
+    {
+      metric: 'FY+5 operating margin',
+      prior: priorFinal?.operatingMargin,
+      revised: baseFinal?.operatingMargin,
+      delta: (baseFinal?.operatingMargin ?? 0) - (priorFinal?.operatingMargin ?? 0),
+      format: 'percent',
+    },
+    {
+      metric: 'FY+5 free cash flow',
+      prior: priorFinal?.freeCashFlow,
+      revised: baseFinal?.freeCashFlow,
+      delta: (baseFinal?.freeCashFlow ?? 0) - (priorFinal?.freeCashFlow ?? 0),
+      format: 'number',
+    },
+    {
+      metric: 'Implied enterprise value',
+      prior: priorView.valuation.enterpriseValue,
+      revised: baseScenario.valuation.enterpriseValue,
+      delta: baseScenario.valuation.enterpriseValue - priorView.valuation.enterpriseValue,
+      format: 'number',
+    },
+    {
+      metric: 'Implied value per share',
+      prior: priorView.valuation.valuePerShare,
+      revised: baseScenario.valuation.valuePerShare,
+      delta: (baseScenario.valuation.valuePerShare ?? 0) - (priorView.valuation.valuePerShare ?? 0),
+      format: 'perShare',
+    },
+  ];
+}
+
+function buildValuationBridge(baseline, baseAdjustment) {
+  const steps = [
+    {
+      key: 'prior',
+      label: 'Prior view',
+      adjustment: ZERO_SCENARIO_ADJUSTMENTS,
+    },
+    {
+      key: 'revenue',
+      label: 'Revenue cadence',
+      adjustment: {
+        ...ZERO_SCENARIO_ADJUSTMENTS,
+        revenueGrowthDeltaPpts: baseAdjustment.revenueGrowthDeltaPpts,
+      },
+    },
+    {
+      key: 'margin',
+      label: 'Margin read-through',
+      adjustment: {
+        ...ZERO_SCENARIO_ADJUSTMENTS,
+        revenueGrowthDeltaPpts: baseAdjustment.revenueGrowthDeltaPpts,
+        grossMarginDeltaBps: baseAdjustment.grossMarginDeltaBps,
+        operatingMarginDeltaBps: baseAdjustment.operatingMarginDeltaBps,
+      },
+    },
+    {
+      key: 'cashflow',
+      label: 'Cash flow intensity',
+      adjustment: {
+        ...ZERO_SCENARIO_ADJUSTMENTS,
+        revenueGrowthDeltaPpts: baseAdjustment.revenueGrowthDeltaPpts,
+        grossMarginDeltaBps: baseAdjustment.grossMarginDeltaBps,
+        operatingMarginDeltaBps: baseAdjustment.operatingMarginDeltaBps,
+        capexPctDeltaBps: baseAdjustment.capexPctDeltaBps,
+        daPctDeltaBps: baseAdjustment.daPctDeltaBps,
+        nwcPctDeltaBps: baseAdjustment.nwcPctDeltaBps,
+        taxRateDeltaBps: baseAdjustment.taxRateDeltaBps,
+      },
+    },
+    {
+      key: 'valuation',
+      label: 'Valuation frame',
+      adjustment: baseAdjustment,
+    },
+  ].map((step) => ({
+    ...step,
+    scenario: buildScenarioModel(step.label, baseline, normalizeScenarioAdjustments(step.adjustment)),
+  }));
+
+  return steps.map((step, index) => {
+    const previousEv = index === 0 ? step.scenario.valuation.enterpriseValue : steps[index - 1].scenario.valuation.enterpriseValue;
+    const currentEv = step.scenario.valuation.enterpriseValue;
+    return {
+      key: step.key,
+      label: step.label,
+      enterpriseValue: currentEv,
+      delta: index === 0 ? 0 : currentEv - previousEv,
+    };
+  });
 }
 
 function buildDcfSensitivity(baseScenario) {

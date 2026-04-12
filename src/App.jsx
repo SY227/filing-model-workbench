@@ -1,24 +1,45 @@
 import { useEffect, useMemo, useState } from 'react';
-import { baselineGroups, defaultBaseline, horizonLabels } from './assumptions';
-import { sampleTranscripts } from './samples';
+import { baselineGroups, defaultBaseline, horizonLabels, supportingMaterialKinds } from './assumptions';
+import { sampleCases } from './samples';
 
 const workflowTemplate = [
-  { key: 'ingest', label: 'Ingesting transcript', note: 'Fetch or normalize transcript text', status: 'pending' },
-  { key: 'signals', label: 'Extracting management guidance and signals', note: 'Pull transcript-backed evidence and themes', status: 'pending' },
-  { key: 'drivers', label: 'Mapping transcript evidence to model drivers', note: 'Connect guidance to revenue, margin, cash flow, and valuation inputs', status: 'pending' },
-  { key: 'revise', label: 'Revising assumptions', note: 'Generate conservative transcript-backed scenario revisions', status: 'pending' },
-  { key: 'forecast', label: 'Building base / upside / downside forecast', note: 'Run deterministic operating forecast math', status: 'pending' },
-  { key: 'valuation', label: 'Running valuation view', note: 'Compute DCF-style enterprise value, equity value, and per-share output', status: 'pending' },
-  { key: 'pack', label: 'Preparing model update pack', note: 'Assemble exportable tables, rationale, and review flags', status: 'pending' },
+  { key: 'filing', label: 'Ingesting filing', note: 'Fetch or normalize the latest 10-Q or 10-K', status: 'pending' },
+  { key: 'support', label: 'Ingesting supporting materials', note: 'Add optional release, deck, letter, or commentary', status: 'pending' },
+  { key: 'reported', label: 'Extracting filing-grounded base', note: 'Pull reported facts, disclosures, and missing inputs', status: 'pending' },
+  { key: 'delta', label: 'Assessing transcript delta', note: 'Compare management commentary against the filing-grounded base', status: 'pending' },
+  { key: 'integrate', label: 'Integrating source read-through', note: 'Merge filing, call, and baseline into estimate revisions', status: 'pending' },
+  { key: 'forecast', label: 'Running deterministic scenario forecast', note: 'Roll assumptions through inspectable code-driven math', status: 'pending' },
+  { key: 'valuation', label: 'Running valuation bridge and sensitivities', note: 'Compute scenario value, bridge impacts, and sensitivities', status: 'pending' },
+  { key: 'pack', label: 'Preparing model update pack', note: 'Assemble banker-style sections, evidence mapping, and exports', status: 'pending' },
 ];
 
-const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const scenarioKeys = ['base', 'upside', 'downside'];
+const confidenceOrder = { high: 3, medium: 2, low: 1 };
+
+function createEmptyDocument(kind, label) {
+  return {
+    kind,
+    label,
+    inputMode: 'text',
+    text: '',
+    url: '',
+  };
+}
+
+function createSupportItem(kind = 'earnings_release') {
+  return {
+    id: crypto.randomUUID(),
+    kind,
+    inputMode: 'text',
+    text: '',
+    url: '',
+  };
+}
 
 export default function App() {
-  const [inputMode, setInputMode] = useState('url');
-  const [url, setUrl] = useState('');
-  const [transcript, setTranscript] = useState('');
+  const [filing, setFiling] = useState(createEmptyDocument('filing', 'Filing'));
+  const [transcript, setTranscript] = useState(createEmptyDocument('transcript', 'Transcript'));
+  const [supportingMaterials, setSupportingMaterials] = useState([]);
   const [baseline, setBaseline] = useState(defaultBaseline);
   const [status, setStatus] = useState({ configured: null, model: null });
   const [workflow, setWorkflow] = useState(workflowTemplate);
@@ -42,51 +63,38 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [copyFeedback]);
 
-  useEffect(() => {
-    if (result) setSelectedScenario('base');
-  }, [result]);
-
-  const transcriptChars = transcript.trim().length;
-  const canSubmit = (inputMode === 'url' ? Boolean(url.trim()) : transcriptChars >= 800) && Number(baseline.currentRevenue) > 0;
+  const filingReady = filing.inputMode === 'url' ? Boolean(filing.url.trim()) : filing.text.trim().length >= 1000;
 
   const summaryStats = useMemo(() => {
     if (!result) return [];
-    const unit = result.baseline.unitLabel;
-    const baseValuation = result.modelPack.scenarios.base.valuation;
-    const baseForecast = result.modelPack.scenarios.base.forecastTable;
+    const priorValue = result.modelPack.priorView.valuation.valuePerShare;
+    const baseValue = result.modelPack.scenarios.base.valuation.valuePerShare;
+    const sourceCount = 1 + (result.sources.transcript ? 1 : 0) + (result.sources.supportingMaterials?.length || 0);
     return [
-      { label: 'Base value / share', value: formatPerShare(baseValuation.valuePerShare, unit) },
-      { label: 'Base enterprise value', value: formatNumber(baseValuation.enterpriseValue, unit) },
-      {
-        label: 'Valuation range',
-        value: `${formatPerShare(result.modelPack.valuationSummary.range.low, unit)} to ${formatPerShare(result.modelPack.valuationSummary.range.high, unit)}`,
-      },
-      { label: 'FY+1 revenue growth', value: formatPercent(baseForecast[0]?.revenueGrowth) },
+      { label: 'Base value / share', value: formatPerShare(baseValue, result.baselineUsed.unitLabel) },
+      { label: 'Change vs prior view', value: formatDelta(baseValue - priorValue, 'perShare', result.baselineUsed.unitLabel) },
+      { label: 'Filing type', value: result.filingMetadata.filingType || 'Needs review' },
+      { label: 'Source count', value: String(sourceCount) },
     ];
   }, [result]);
 
   const selectedScenarioModel = result ? result.modelPack.scenarios[selectedScenario] : null;
 
   async function handleProcess() {
-    if (!canSubmit || isProcessing) return;
+    if (!filingReady || isProcessing) return;
 
     setError('');
     setResult(null);
     setLastCompletedStage('');
-    setWorkflow(
-      workflowTemplate.map((step, index) => ({
-        ...step,
-        status: index === 0 ? 'active' : 'pending',
-      }))
-    );
+    setWorkflow(workflowTemplate.map((step, index) => ({ ...step, status: index === 0 ? 'active' : 'pending' })));
     setIsProcessing(true);
 
     try {
       await streamProcess(
         {
-          inputMode,
-          url: url.trim(),
-          transcript,
+          filing,
+          transcript: hasDocumentContent(transcript) ? transcript : null,
+          supportingMaterials: supportingMaterials.filter(hasDocumentContent),
           baseline,
         },
         {
@@ -103,6 +111,7 @@ export default function App() {
           },
           onResult: (payload) => {
             setResult(payload);
+            setSelectedScenario('base');
             setWorkflow((current) => current.map((step) => ({ ...step, status: 'complete' })));
           },
           onError: (payload) => {
@@ -119,8 +128,9 @@ export default function App() {
   }
 
   function handleReset() {
-    setUrl('');
-    setTranscript('');
+    setFiling(createEmptyDocument('filing', 'Filing'));
+    setTranscript(createEmptyDocument('transcript', 'Transcript'));
+    setSupportingMaterials([]);
     setBaseline(defaultBaseline);
     setError('');
     setResult(null);
@@ -130,10 +140,7 @@ export default function App() {
   }
 
   function handleBaselineChange(key, value) {
-    setBaseline((current) => ({
-      ...current,
-      [key]: value,
-    }));
+    setBaseline((current) => ({ ...current, [key]: value }));
   }
 
   function handleRevenueGrowthChange(index, value) {
@@ -144,17 +151,29 @@ export default function App() {
   }
 
   function loadSample(sample) {
-    setInputMode('text');
-    setTranscript(sample.transcript);
+    setFiling(sample.filing);
+    setTranscript(sample.transcript || createEmptyDocument('transcript', 'Transcript'));
+    setSupportingMaterials((sample.supportingMaterials || []).map((item) => ({ id: crypto.randomUUID(), ...item })));
     setBaseline(sample.baseline);
     setError('');
     setResult(null);
   }
 
+  function updateSupportItem(id, key, value) {
+    setSupportingMaterials((current) => current.map((item) => (item.id === id ? { ...item, [key]: value } : item)));
+  }
+
+  function addSupportItem() {
+    setSupportingMaterials((current) => [...current, createSupportItem()]);
+  }
+
+  function removeSupportItem(id) {
+    setSupportingMaterials((current) => current.filter((item) => item.id !== id));
+  }
+
   async function handleCopy(kind) {
     if (!result) return;
-    const text = buildCopyPayload(kind, result);
-    await navigator.clipboard.writeText(text);
+    await navigator.clipboard.writeText(buildCopyPayload(kind, result));
     setCopyFeedback(copyLabel(kind));
   }
 
@@ -175,22 +194,21 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <div className="page-gradient" />
       <main className="page">
-        <section className="hero card glass">
-          <div>
-            <div className="eyebrow">External analyst modeling workflow</div>
-            <h1>Earnings-to-Model Update Agent</h1>
+        <section className="hero card">
+          <div className="hero-copy-block">
+            <div className="eyebrow">Filing-grounded external analyst workflow</div>
+            <h1>Filing-to-Model Update Workbench</h1>
             <p className="hero-copy">
-              Turn earnings transcripts plus analyst baseline assumptions into a transcript-backed forecast,
-              DCF-style valuation view, and exportable model update pack.
+              Ground the model in the latest 10-Q or 10-K, layer in call commentary where available,
+              and produce a reviewable forecast and valuation update with explicit evidence, inference boundaries, and deterministic math.
             </p>
           </div>
           <div className="hero-meta">
             <StatusPill configured={status.configured} model={status.model} />
             <div className="hero-stats">
-              <StatTile label="Core flow" value="Transcript → Assumptions → Forecast → Valuation" />
-              <StatTile label="Built for" value="Investors, research, corp dev, strategy" />
+              <StatTile label="Primary anchor" value="Latest 10-Q / 10-K" />
+              <StatTile label="Optional layer" value="Transcript, release, deck, letter" />
             </div>
           </div>
         </section>
@@ -200,61 +218,97 @@ export default function App() {
             <section className="card input-card">
               <div className="section-header">
                 <div>
-                  <div className="section-kicker">Step 1</div>
-                  <h2>Transcript input</h2>
+                  <div className="section-kicker">Step 1 to 3</div>
+                  <h2>Source materials</h2>
                 </div>
-                <button className="ghost-button" onClick={handleReset} disabled={isProcessing}>
-                  Reset
-                </button>
+                <button className="ghost-button" onClick={handleReset} disabled={isProcessing}>Reset</button>
               </div>
 
-              <div className="mode-switch" role="tablist" aria-label="Input mode">
-                <button className={inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => setInputMode('url')}>
-                  Paste transcript URL
-                </button>
-                <button className={inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => setInputMode('text')}>
-                  Paste transcript text
-                </button>
-              </div>
+              <DocumentInputCard
+                title="Latest filing"
+                subtitle="Required. Use the latest 10-Q or 10-K as the factual base for the model update."
+                document={filing}
+                required
+                onChange={setFiling}
+                urlPlaceholder="https://www.sec.gov/.../10-q-or-10-k"
+                textPlaceholder="Paste the latest filing text here"
+              />
 
-              {inputMode === 'url' ? (
-                <div className="input-block">
-                  <label htmlFor="transcript-url">Transcript URL</label>
-                  <input
-                    id="transcript-url"
-                    className="text-input"
-                    type="url"
-                    placeholder="https://www.example.com/earnings-transcript"
-                    value={url}
-                    onChange={(event) => setUrl(event.target.value)}
-                  />
-                  <p className="input-help">
-                    The backend attempts a best-effort transcript fetch and cleanup. If the page is hard to parse, the app will steer you to paste-text mode.
-                  </p>
-                </div>
-              ) : (
-                <div className="input-block">
-                  <div className="label-row">
-                    <label htmlFor="transcript-text">Transcript text</label>
-                    <span>{transcriptChars.toLocaleString()} chars</span>
+              <DocumentInputCard
+                title="Earnings transcript"
+                subtitle="Optional but recommended. Use the call to detect what changed and to shape the forward view."
+                document={transcript}
+                onChange={setTranscript}
+                urlPlaceholder="https://www.example.com/earnings-call-transcript"
+                textPlaceholder="Paste the earnings transcript here"
+              />
+
+              <div className="support-card">
+                <div className="support-header">
+                  <div>
+                    <div className="support-title">Supporting materials</div>
+                    <div className="support-copy">Optional. Add the release, deck, shareholder letter, or other management commentary.</div>
                   </div>
-                  <textarea
-                    id="transcript-text"
-                    className="transcript-input"
-                    placeholder="Paste the earnings transcript here"
-                    value={transcript}
-                    onChange={(event) => setTranscript(event.target.value)}
-                  />
-                  <p className="input-help">
-                    Preserve speaker changes and management guidance where possible. The transcript remains visible in the final model pack for trust and review.
-                  </p>
+                  <button className="secondary-button small-button" onClick={addSupportItem} type="button">Add source</button>
                 </div>
-              )}
+
+                {supportingMaterials.length === 0 ? (
+                  <div className="subtle-empty">No optional support materials added.</div>
+                ) : (
+                  <div className="supporting-list">
+                    {supportingMaterials.map((item) => (
+                      <div key={item.id} className="supporting-item">
+                        <div className="supporting-item-top">
+                          <select className="select-input" value={item.kind} onChange={(event) => updateSupportItem(item.id, 'kind', event.target.value)}>
+                            {supportingMaterialKinds.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                          <div className="mini-switch">
+                            <button
+                              className={item.inputMode === 'text' ? 'mode-button active' : 'mode-button'}
+                              onClick={() => updateSupportItem(item.id, 'inputMode', 'text')}
+                              type="button"
+                            >
+                              Paste text
+                            </button>
+                            <button
+                              className={item.inputMode === 'url' ? 'mode-button active' : 'mode-button'}
+                              onClick={() => updateSupportItem(item.id, 'inputMode', 'url')}
+                              type="button"
+                            >
+                              Paste URL
+                            </button>
+                          </div>
+                          <button className="ghost-button small-button" type="button" onClick={() => removeSupportItem(item.id)}>Remove</button>
+                        </div>
+
+                        {item.inputMode === 'url' ? (
+                          <input
+                            className="text-input"
+                            type="url"
+                            placeholder="https://www.example.com/supporting-material"
+                            value={item.url || ''}
+                            onChange={(event) => updateSupportItem(item.id, 'url', event.target.value)}
+                          />
+                        ) : (
+                          <textarea
+                            className="transcript-input compact"
+                            placeholder="Paste supporting material text here"
+                            value={item.text || ''}
+                            onChange={(event) => updateSupportItem(item.id, 'text', event.target.value)}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
 
               <div className="samples-row">
-                <div className="samples-label">Built-in example runs</div>
+                <div className="samples-label">Example cases</div>
                 <div className="sample-chips">
-                  {sampleTranscripts.map((sample) => (
+                  {sampleCases.map((sample) => (
                     <button key={sample.id} className="sample-chip" onClick={() => loadSample(sample)} disabled={isProcessing}>
                       <strong>{sample.label}</strong>
                       <span>{sample.description}</span>
@@ -269,10 +323,10 @@ export default function App() {
             <section className="card assumptions-card">
               <div className="section-header compact">
                 <div>
-                  <div className="section-kicker">Step 2</div>
-                  <h2>Baseline analyst model</h2>
+                  <div className="section-kicker">Step 4</div>
+                  <h2>Prior baseline assumptions</h2>
                 </div>
-                <div className="card-badge">Editable inputs</div>
+                <div className="card-badge">Editable</div>
               </div>
 
               {baselineGroups.map((group) => (
@@ -287,7 +341,7 @@ export default function App() {
                       {horizonLabels.map((label, index) => (
                         <NumericField
                           key={label}
-                          label={`${label} growth`}
+                          label={label}
                           value={baseline.revenueGrowth[index]}
                           step={0.1}
                           suffix="%"
@@ -311,18 +365,20 @@ export default function App() {
               ))}
 
               <div className="action-row model-action-row">
-                <button className="primary-button" onClick={handleProcess} disabled={!canSubmit || isProcessing}>
-                  {isProcessing ? 'Building model update…' : 'Generate forecast and valuation update'}
+                <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
+                  {isProcessing ? 'Building model update pack…' : 'Generate model update pack'}
                 </button>
-                <div className="inline-guidance">Use your own baseline view. The app adjusts it with transcript-backed scenario logic, then runs deterministic model math.</div>
+                <div className="inline-guidance">
+                  Filing input is required. Transcript input is optional, but it materially improves change detection and the forward read-through.
+                </div>
               </div>
             </section>
 
             <section className="card workflow-card">
               <div className="section-header compact">
                 <div>
-                  <div className="section-kicker">Workflow</div>
-                  <h2>Agentic model build</h2>
+                  <div className="section-kicker">Step 5</div>
+                  <h2>Processing trail</h2>
                 </div>
                 {isProcessing ? <span className="live-pill">Live</span> : null}
               </div>
@@ -339,7 +395,7 @@ export default function App() {
                 ))}
               </div>
               <div className="workflow-footer">
-                {isProcessing ? `Current step: ${lastCompletedStage || 'Starting'}` : result ? 'Model pack complete' : 'Ready to process'}
+                {isProcessing ? `Current step: ${lastCompletedStage || 'Starting'}` : result ? 'Update pack complete' : 'Awaiting required filing input'}
               </div>
             </section>
           </div>
@@ -348,18 +404,18 @@ export default function App() {
             {!result ? (
               <section className="card empty-state">
                 <div className="section-kicker">Output</div>
-                <h2>Forecast, valuation, and evidence appear here</h2>
+                <h2>Filing-grounded work product appears here</h2>
                 <p>
-                  This workspace is designed for outside analysts. It turns transcript evidence into assumption revisions,
-                  rolls them through deterministic operating forecast math, and surfaces a reviewable valuation range.
+                  The output is organized like institutional finance work product: filing-grounded base assumptions,
+                  recommended estimate changes, deterministic scenario forecast, valuation bridge, and a clear evidence trail.
                 </p>
                 <div className="empty-grid">
-                  <div className="empty-chip">Executive model summary</div>
-                  <div className="empty-chip">Assumption change log</div>
-                  <div className="empty-chip">Forecast table</div>
-                  <div className="empty-chip">DCF-style valuation</div>
-                  <div className="empty-chip">Scenario comparison</div>
-                  <div className="empty-chip">Evidence + review flags</div>
+                  <div className="empty-chip">Executive takeaway</div>
+                  <div className="empty-chip">What changed vs prior view</div>
+                  <div className="empty-chip">Filing-grounded base</div>
+                  <div className="empty-chip">Estimate change log</div>
+                  <div className="empty-chip">Scenario forecast</div>
+                  <div className="empty-chip">Valuation bridge</div>
                 </div>
               </section>
             ) : (
@@ -368,24 +424,24 @@ export default function App() {
                   <div className="report-hero-top">
                     <div>
                       <div className="section-kicker">Model update pack</div>
-                      <h2>{result.metadata.company || result.metadata.title || 'Transcript model update'}</h2>
+                      <h2>{result.filingMetadata.company || result.filingMetadata.title || 'Filing-grounded model update'}</h2>
                     </div>
                     <div className="action-cluster">
-                      <button className="secondary-button" onClick={() => handleCopy('summary')}>Copy summary</button>
-                      <button className="secondary-button" onClick={() => handleCopy('forecast')}>Copy forecast table</button>
-                      <button className="secondary-button" onClick={() => handleCopy('valuation')}>Copy valuation table</button>
+                      <button className="secondary-button" onClick={() => handleCopy('takeaway')}>Copy takeaway</button>
+                      <button className="secondary-button" onClick={() => handleCopy('changes')}>Copy estimate changes</button>
+                      <button className="secondary-button" onClick={() => handleCopy('forecast')}>Copy forecast</button>
+                      <button className="secondary-button" onClick={() => handleDownload('changes')}>Estimate CSV</button>
                       <button className="secondary-button" onClick={() => handleDownload('forecast')}>Forecast CSV</button>
-                      <button className="secondary-button" onClick={() => handleDownload('assumptions')}>Assumptions CSV</button>
                       <button className="secondary-button" onClick={() => handleDownload('valuation')}>Valuation CSV</button>
                       <button className="secondary-button" onClick={() => window.print()}>Export report</button>
                     </div>
                   </div>
 
-                  <div className="report-header-grid">
-                    <MetaPill label="Company" value={result.metadata.company || 'Needs review'} />
-                    <MetaPill label="Period" value={result.metadata.quarter || 'Needs review'} />
-                    <MetaPill label="Call date" value={result.metadata.callDate || 'Needs review'} />
-                    <MetaPill label="Tone" value={result.metadata.managementTone?.label || 'neutral'} />
+                  <div className="report-header-grid report-meta-grid">
+                    <MetaPill label="Filing type" value={result.filingMetadata.filingType || 'Needs review'} />
+                    <MetaPill label="Period" value={result.filingMetadata.period || 'Needs review'} />
+                    <MetaPill label="Filing date" value={result.filingMetadata.filingDate || 'Needs review'} />
+                    <MetaPill label="Call layer" value={result.sources.transcript ? 'Included' : 'Not provided'} />
                   </div>
 
                   <div className="summary-stats-grid">
@@ -394,45 +450,132 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className="themes-row">
-                    {(result.metadata.majorThemes || []).map((theme) => (
-                      <span key={theme} className="theme-chip">{theme}</span>
-                    ))}
-                  </div>
-
                   {copyFeedback ? <div className="copy-feedback">{copyFeedback}</div> : null}
                 </section>
 
-                <SectionCard title="Executive model summary" kicker="A" defaultOpen>
-                  <div className="executive-headline">{result.executiveSummary?.headline}</div>
-                  <p className="executive-body">{result.executiveSummary?.body}</p>
+                <SectionCard title="Executive takeaway" kicker="1" defaultOpen>
+                  <div className="executive-headline">{result.executiveTakeaway?.headline}</div>
+                  <p className="executive-body">{result.executiveTakeaway?.body}</p>
                   <ul className="bullet-list">
-                    {(result.executiveSummary?.bullets || []).map((bullet) => (
+                    {(result.executiveTakeaway?.bullets || []).map((bullet) => (
                       <li key={bullet}>{bullet}</li>
                     ))}
                   </ul>
                 </SectionCard>
 
-                <SectionCard title="Assumption change log" kicker="B" defaultOpen>
+                <SectionCard title="Key filing and call takeaways" kicker="2" defaultOpen>
+                  <div className="takeaway-grid">
+                    {sortByConfidence(result.keyTakeaways).map((item, index) => (
+                      <article key={`${item.title}-${index}`} className="takeaway-card">
+                        <div className="takeaway-top">
+                          <SourcePill source={item.source} />
+                          <div className="pill-group">
+                            <ClassificationPill classification={item.classification} />
+                            <ConfidencePill confidence={item.confidence} />
+                          </div>
+                        </div>
+                        <h3>{item.title}</h3>
+                        <p>{item.summary}</p>
+                      </article>
+                    ))}
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="What changed vs prior view" kicker="3" defaultOpen>
+                  <div className="executive-body">{result.changeVsPriorView?.summary}</div>
+                  <ul className="bullet-list compact-list">
+                    {(result.changeVsPriorView?.bullets || []).map((bullet) => (
+                      <li key={bullet}>{bullet}</li>
+                    ))}
+                  </ul>
+
+                  <div className="table-wrap compact-spacing">
+                    <table className="comparison-table numeric-table">
+                      <thead>
+                        <tr>
+                          <th>Metric</th>
+                          <th>Prior view</th>
+                          <th>Revised base</th>
+                          <th>Change</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(result.modelPack.changeVsPrior || []).map((row) => (
+                          <tr key={row.metric}>
+                            <td className="strong-cell">{row.metric}</td>
+                            <td className="numeric-cell">{formatByType(row.prior, row.format, result.baselineUsed.unitLabel)}</td>
+                            <td className="numeric-cell">{formatByType(row.revised, row.format, result.baselineUsed.unitLabel)}</td>
+                            <td className="numeric-cell">{formatDelta(row.delta, row.format, result.baselineUsed.unitLabel)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Filing-grounded base assumptions" kicker="4" defaultOpen>
+                  <div className="base-summary">{result.filingGroundedBase?.summary || result.reportedBase?.summary}</div>
+
+                  <div className="facts-grid">
+                    {(result.reportedBase?.reportedFacts || []).slice(0, 8).map((fact, index) => (
+                      <div key={`${fact.metric}-${index}`} className="fact-card">
+                        <div className="fact-metric">{fact.metric}</div>
+                        <div className="fact-value">{fact.valueText}</div>
+                        <div className="fact-foot">{fact.category}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="table-wrap compact-spacing">
+                    <table className="delta-table assumption-table">
+                      <thead>
+                        <tr>
+                          <th>Field</th>
+                          <th>Current baseline</th>
+                          <th>Filing read-through</th>
+                          <th>Status</th>
+                          <th>Evidence</th>
+                          <th>Confidence</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(result.filingGroundedBase?.assumptionChecks || []).map((row, index) => (
+                          <tr key={`${row.field}-${index}`}>
+                            <td className="strong-cell">{row.field}</td>
+                            <td>{row.currentBaseline}</td>
+                            <td>{row.filingReadThrough}</td>
+                            <td><ClassificationPill classification={row.status} /></td>
+                            <td>{row.evidence}</td>
+                            <td><ConfidencePill confidence={row.confidence} /></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Recommended estimate changes" kicker="5" defaultOpen>
                   <div className="table-wrap">
-                    <table className="delta-table">
+                    <table className="delta-table assumption-table">
                       <thead>
                         <tr>
                           <th>Driver</th>
-                          <th>Prior analyst baseline</th>
-                          <th>Updated view</th>
+                          <th>Prior view</th>
+                          <th>Recommended change</th>
+                          <th>Classification</th>
                           <th>Rationale</th>
-                          <th>Transcript evidence</th>
+                          <th>Evidence</th>
                           <th>Confidence</th>
                           <th>Review</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {(result.assumptionDeltaLog || []).map((row, index) => (
+                        {(result.estimateChangeLog || []).map((row, index) => (
                           <tr key={`${row.driver}-${index}`}>
                             <td className="strong-cell">{row.driver}</td>
-                            <td>{row.priorAnalystBaseline}</td>
-                            <td>{row.updatedValue}</td>
+                            <td>{row.priorView}</td>
+                            <td>{row.recommendedChange}</td>
+                            <td><ClassificationPill classification={row.classification} /></td>
                             <td>{row.rationale}</td>
                             <td>{row.evidence}</td>
                             <td><ConfidencePill confidence={row.confidence} /></td>
@@ -444,7 +587,7 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Forecast table" kicker="C" defaultOpen>
+                <SectionCard title="Scenario forecast" kicker="6" defaultOpen>
                   <div className="section-controls">
                     <div className="scenario-toggle">
                       {scenarioKeys.map((scenarioKey) => (
@@ -452,42 +595,43 @@ export default function App() {
                           key={scenarioKey}
                           className={selectedScenario === scenarioKey ? 'mode-button active' : 'mode-button'}
                           onClick={() => setSelectedScenario(scenarioKey)}
+                          type="button"
                         >
-                          {capitalize(scenarioKey)} case
+                          {capitalize(scenarioKey)}
                         </button>
                       ))}
                     </div>
-                    <div className="mini-note">Scenario math is deterministic. Gemini only proposes structured revisions and rationale.</div>
+                    <div className="mini-note">Math is code-driven. Gemini only proposes the structured revision layer.</div>
                   </div>
 
                   <div className="scenario-note-card">
                     <div className="scenario-note-head">
                       <span className="scenario-label solid">{capitalize(selectedScenario)} case</span>
-                      <span className="mini-note">{selectedScenarioModel?.narrative?.summary || 'No scenario note returned.'}</span>
+                      <span className="mini-note">{result.scenarioWriteups?.[selectedScenario]?.summary || selectedScenarioModel?.narrative?.summary}</span>
                     </div>
-                    <div className="themes-row small">
-                      {(selectedScenarioModel?.narrative?.keyAssumptions || []).map((point) => (
-                        <span key={point} className="theme-chip muted">{point}</span>
+                    <ul className="bullet-list compact-list inside-card">
+                      {(result.scenarioWriteups?.[selectedScenario]?.bullets || selectedScenarioModel?.narrative?.keyAssumptions || []).map((point) => (
+                        <li key={point}>{point}</li>
                       ))}
-                    </div>
+                    </ul>
                   </div>
 
                   <div className="table-wrap">
-                    <table className="forecast-table">
+                    <table className="forecast-table numeric-table">
                       <thead>
                         <tr>
                           <th>Metric</th>
                           {selectedScenarioModel?.forecastTable.map((row) => (
-                            <th key={row.year}>{row.year}</th>
+                            <th key={row.year} className="numeric-cell">{row.year}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {forecastMetricRows(selectedScenarioModel, result.baseline.unitLabel).map((row) => (
+                        {forecastMetricRows(selectedScenarioModel, result.baselineUsed.unitLabel).map((row) => (
                           <tr key={row.label}>
                             <td className="strong-cell">{row.label}</td>
                             {row.values.map((value, index) => (
-                              <td key={`${row.label}-${index}`}>{value}</td>
+                              <td key={`${row.label}-${index}`} className="numeric-cell">{value}</td>
                             ))}
                           </tr>
                         ))}
@@ -496,38 +640,67 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Valuation" kicker="D" defaultOpen>
-                  <div className="valuation-grid">
-                    {scenarioKeys.map((scenarioKey) => {
-                      const valuation = result.modelPack.scenarios[scenarioKey].valuation;
-                      return (
-                        <article key={scenarioKey} className={`valuation-card ${scenarioKey}`}>
-                          <div className="scenario-label">{scenarioKey}</div>
-                          <div className="valuation-main">{formatPerShare(valuation.valuePerShare, result.baseline.unitLabel)}</div>
-                          <div className="valuation-sub">Implied value per share</div>
-                          <div className="valuation-list">
-                            <ValuationLine label="Enterprise value" value={formatNumber(valuation.enterpriseValue, result.baseline.unitLabel)} />
-                            <ValuationLine label="Equity value" value={formatNumber(valuation.equityValue, result.baseline.unitLabel)} />
-                            <ValuationLine label="Terminal value" value={formatNumber(valuation.terminalValue, result.baseline.unitLabel)} />
-                            <ValuationLine label="PV of terminal" value={formatNumber(valuation.pvTerminalValue, result.baseline.unitLabel)} />
-                            <ValuationLine label="WACC" value={formatPercent(valuation.wacc)} />
-                            <ValuationLine label="Terminal growth" value={formatPercent(valuation.terminalGrowth)} />
-                            <ValuationLine label="Exit EBITDA EV" value={formatNumber(valuation.exitMultipleValue, result.baseline.unitLabel)} />
+                <SectionCard title="Valuation summary" kicker="7" defaultOpen>
+                  <div className="valuation-summary-copy">{result.valuationSummary?.summary}</div>
+                  <div className="valuation-grid four-up">
+                    <ValuationCard title="Prior view" valuation={result.modelPack.priorView.valuation} unitLabel={result.baselineUsed.unitLabel} tone="prior" />
+                    <ValuationCard title="Base case" valuation={result.modelPack.scenarios.base.valuation} unitLabel={result.baselineUsed.unitLabel} tone="base" />
+                    <ValuationCard title="Upside case" valuation={result.modelPack.scenarios.upside.valuation} unitLabel={result.baselineUsed.unitLabel} tone="upside" />
+                    <ValuationCard title="Downside case" valuation={result.modelPack.scenarios.downside.valuation} unitLabel={result.baselineUsed.unitLabel} tone="downside" />
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Valuation bridge and key sensitivities" kicker="8" defaultOpen>
+                  <div className="executive-body">{result.valuationSummary?.bridgeCommentary}</div>
+
+                  <div className="bridge-grid">
+                    <div className="table-wrap compact-spacing">
+                      <table className="comparison-table numeric-table">
+                        <thead>
+                          <tr>
+                            <th>Bridge step</th>
+                            <th>Enterprise value</th>
+                            <th>Step delta</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(result.modelPack.valuationBridge || []).map((row) => (
+                            <tr key={row.key}>
+                              <td className="strong-cell">{row.label}</td>
+                              <td className="numeric-cell">{formatNumber(row.enterpriseValue, result.baselineUsed.unitLabel)}</td>
+                              <td className="numeric-cell">{formatDelta(row.delta, 'number', result.baselineUsed.unitLabel)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="bridge-comments">
+                      <div className="split-header">Key valuation implications</div>
+                      <div className="stack-list">
+                        {(result.valuationImplications?.bridgeDrivers || []).map((item, index) => (
+                          <div key={`${item.driver}-${index}`} className="stack-item">
+                            <div className="signal-card-top">
+                              <span className="category-pill">{item.driver}</span>
+                              <ConfidencePill confidence={item.confidence} />
+                            </div>
+                            <div className="stack-text">{item.effect}</div>
+                            <div className="stack-support">{item.explanation}</div>
                           </div>
-                        </article>
-                      );
-                    })}
+                        ))}
+                      </div>
+                    </div>
                   </div>
 
                   <div className="sensitivity-card">
-                    <div className="section-subtitle">Base-case EV sensitivity ({result.baseline.unitLabel})</div>
+                    <div className="section-subtitle">Base-case EV sensitivity ({result.baselineUsed.unitLabel})</div>
                     <div className="table-wrap compact-wrap">
-                      <table className="sensitivity-table">
+                      <table className="sensitivity-table numeric-table">
                         <thead>
                           <tr>
                             <th>Terminal growth \ WACC</th>
                             {result.modelPack.baseSensitivity.waccValues.map((value) => (
-                              <th key={value}>{formatPercent(value)}</th>
+                              <th key={value} className="numeric-cell">{formatPercent(value)}</th>
                             ))}
                           </tr>
                         </thead>
@@ -536,7 +709,7 @@ export default function App() {
                             <tr key={terminalValue}>
                               <td className="strong-cell">{formatPercent(terminalValue)}</td>
                               {result.modelPack.baseSensitivity.matrix[rowIndex].map((cell, cellIndex) => (
-                                <td key={`${terminalValue}-${cellIndex}`}>{formatNumber(cell, result.baseline.unitLabel)}</td>
+                                <td key={`${terminalValue}-${cellIndex}`} className="numeric-cell">{formatNumber(cell, result.baselineUsed.unitLabel)}</td>
                               ))}
                             </tr>
                           ))}
@@ -546,98 +719,58 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Scenario comparison" kicker="E" defaultOpen>
-                  <div className="table-wrap">
-                    <table className="comparison-table">
-                      <thead>
-                        <tr>
-                          <th>Metric</th>
-                          <th>Base</th>
-                          <th>Upside</th>
-                          <th>Downside</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(result.modelPack.comparison || []).map((row) => (
-                          <tr key={row.metric}>
-                            <td className="strong-cell">{row.metric}</td>
-                            <td>{formatByType(row.base, row.format, result.baseline.unitLabel)}</td>
-                            <td>{formatByType(row.upside, row.format, result.baseline.unitLabel)}</td>
-                            <td>{formatByType(row.downside, row.format, result.baseline.unitLabel)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Transcript evidence" kicker="F">
-                  <div className="signal-grid single">
-                    <div className="evidence-card">
-                      <div className="split-header">Model driver map</div>
-                      <div className="stack-list">
-                        {sortByConfidence(result.modelDriverMap).map((item, index) => (
-                          <div key={`${item.driver}-${index}`} className="stack-item">
-                            <div className="signal-card-top">
-                              <span className="category-pill">{prettyCategory(item.driver)}</span>
-                              <ConfidencePill confidence={item.confidence} />
-                            </div>
-                            <div className="stack-text">{item.summary}</div>
-                            <div className="stack-support">Impact: {item.impact}</div>
-                            <div className="source-block">{item.evidence}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="two-column-grid evidence-columns">
-                    <div className="split-panel">
-                      <div className="split-header">Explicit management statements</div>
-                      <div className="stack-list">
-                        {(result.explicitStatements || []).map((item, index) => (
-                          <div key={`${item.statement}-${index}`} className="stack-item">
-                            <div className="stack-text">{item.statement}</div>
-                            <div className="source-block">{item.evidence}</div>
+                <SectionCard title="Evidence map" kicker="9">
+                  <div className="evidence-grid">
+                    {sortByConfidence(result.evidenceMap).map((item, index) => (
+                      <div key={`${item.driver}-${index}`} className="evidence-card">
+                        <div className="takeaway-top">
+                          <SourcePill source={item.source} />
+                          <div className="pill-group">
+                            <ClassificationPill classification={item.classification} />
                             <ConfidencePill confidence={item.confidence} />
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="split-panel">
-                      <div className="split-header">Inferred modeling implications</div>
-                      <div className="stack-list">
-                        {(result.inferredImplications || []).map((item, index) => (
-                          <div key={`${item.implication}-${index}`} className="stack-item">
-                            <div className="stack-text">{item.implication}</div>
-                            <div className="stack-support">{item.whyItMatters}</div>
-                            <div className="source-block">{item.evidence}</div>
-                            <ConfidencePill confidence={item.confidence} />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Review flags" kicker="G">
-                  <div className="flag-list">
-                    {(result.reviewFlags || []).map((flag, index) => (
-                      <div key={`${flag.item}-${index}`} className="flag-row">
-                        <div>
-                          <h3>{flag.item}</h3>
-                          <p>{flag.reason}</p>
-                          <div className="source-block">{flag.evidence}</div>
                         </div>
-                        <ConfidencePill confidence={flag.confidence} />
+                        <div className="stack-text">{prettyCategory(item.driver)}</div>
+                        <div className="stack-support">{item.summary}</div>
+                        <div className="source-block">{item.evidence}</div>
                       </div>
                     ))}
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Model update checklist" kicker="H">
+                <SectionCard title="Review flags and analyst judgment" kicker="10">
+                  <div className="two-column-grid review-columns">
+                    <div className="split-panel">
+                      <div className="split-header">Review flags</div>
+                      <div className="stack-list">
+                        {(result.reviewFlags || []).map((flag, index) => (
+                          <div key={`${flag.item}-${index}`} className="stack-item">
+                            <div className="stack-text">{flag.item}</div>
+                            <div className="stack-support">{flag.reason}</div>
+                            <div className="source-block">{flag.evidence}</div>
+                            <ConfidencePill confidence={flag.confidence} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="split-panel">
+                      <div className="split-header">Watch items</div>
+                      <div className="stack-list">
+                        {(result.watchItems || []).map((item, index) => (
+                          <div key={`${item.item}-${index}`} className="stack-item">
+                            <div className="stack-text">{item.item}</div>
+                            <div className="stack-support">{item.whyItMatters}</div>
+                            <ConfidencePill confidence={item.confidence} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </SectionCard>
+
+                <SectionCard title="Model update checklist" kicker="11">
                   <div className="checklist-grid">
-                    {(result.modelUpdateChecklist || []).map((item, index) => (
+                    {(result.checklist || []).map((item, index) => (
                       <div key={`${item.task}-${index}`} className="check-card">
                         <div className="check-top">
                           <span className="check-bullet">{index + 1}</span>
@@ -650,38 +783,60 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Review trail" kicker="I">
-                  <div className="trail-list">
-                    {(result.reviewTrail || []).map((item, index) => (
-                      <div key={`${item.item}-${index}`} className="trail-row">
-                        <div>
-                          <div className="trail-item">{item.item}</div>
-                          <div className="trail-reason">{item.whyReview}</div>
-                        </div>
-                        <div className="trail-meta">
-                          <span className="category-pill">{item.classification}</span>
-                          <ConfidencePill confidence={item.confidence} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                <SectionCard title="Source appendix" kicker="12">
+                  <SourceAppendixCard title="Filing" source={result.sources.filing} />
+                  {result.sources.transcript ? <SourceAppendixCard title="Transcript" source={result.sources.transcript} /> : null}
+                  {(result.sources.supportingMaterials || []).map((source, index) => (
+                    <SourceAppendixCard key={`${source.title}-${index}`} title={source.label || `Supporting material ${index + 1}`} source={source} />
+                  ))}
                 </SectionCard>
-
-                <details className="card transcript-card">
-                  <summary>
-                    <div>
-                      <div className="section-kicker">Source review</div>
-                      <h2>Extracted transcript</h2>
-                    </div>
-                    <span className="summary-hint">Open</span>
-                  </summary>
-                  <div className="transcript-preview">{result.source.transcriptFull}</div>
-                </details>
               </>
             )}
           </div>
         </section>
       </main>
+    </div>
+  );
+}
+
+function DocumentInputCard({ title, subtitle, document, onChange, required = false, urlPlaceholder, textPlaceholder }) {
+  return (
+    <div className="document-card">
+      <div className="document-card-head">
+        <div>
+          <div className="document-title-row">
+            <div className="document-title">{title}</div>
+            {required ? <span className="required-pill">Required</span> : <span className="optional-pill">Optional</span>}
+          </div>
+          <div className="document-copy">{subtitle}</div>
+        </div>
+      </div>
+
+      <div className="mini-switch">
+        <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">
+          Paste text
+        </button>
+        <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">
+          Paste URL
+        </button>
+      </div>
+
+      {document.inputMode === 'url' ? (
+        <input
+          className="text-input"
+          type="url"
+          placeholder={urlPlaceholder}
+          value={document.url || ''}
+          onChange={(event) => onChange({ ...document, url: event.target.value })}
+        />
+      ) : (
+        <textarea
+          className="transcript-input"
+          placeholder={textPlaceholder}
+          value={document.text || ''}
+          onChange={(event) => onChange({ ...document, text: event.target.value })}
+        />
+      )}
     </div>
   );
 }
@@ -733,8 +888,57 @@ function SectionCard({ title, kicker, children, defaultOpen = false }) {
   );
 }
 
+function SourceAppendixCard({ title, source }) {
+  return (
+    <details className="appendix-card" open={false}>
+      <summary>
+        <div>
+          <div className="appendix-title">{title}</div>
+          <div className="appendix-meta">{source.inputMode === 'url' ? source.url || 'URL source' : `${source.chars.toLocaleString()} chars`}</div>
+        </div>
+        <span className="summary-hint">Open</span>
+      </summary>
+      <div className="transcript-preview appendix-text">{source.fullText}</div>
+    </details>
+  );
+}
+
+function SourcePill({ source }) {
+  const label =
+    source === 'filing'
+      ? 'Filing'
+      : source === 'transcript'
+        ? 'Transcript'
+        : source === 'supporting_material'
+          ? 'Support'
+          : source === 'integrated_model'
+            ? 'Model layer'
+            : source;
+  return <span className={`source-pill ${source}`}>{label}</span>;
+}
+
+function ClassificationPill({ classification = 'inferred' }) {
+  return <span className={`classification-pill ${classification}`}>{classificationLabel(classification)}</span>;
+}
+
+function ValuationCard({ title, valuation, unitLabel, tone }) {
+  return (
+    <article className={`valuation-card ${tone}`}>
+      <div className="scenario-label">{title}</div>
+      <div className="valuation-main">{formatPerShare(valuation.valuePerShare, unitLabel)}</div>
+      <div className="valuation-sub">Implied value per share</div>
+      <div className="valuation-list compact-listing">
+        <ValuationLine label="Enterprise value" value={formatNumber(valuation.enterpriseValue, unitLabel)} />
+        <ValuationLine label="Equity value" value={formatNumber(valuation.equityValue, unitLabel)} />
+        <ValuationLine label="WACC" value={formatPercent(valuation.wacc)} />
+        <ValuationLine label="Terminal growth" value={formatPercent(valuation.terminalGrowth)} />
+      </div>
+    </article>
+  );
+}
+
 function StatusPill({ configured, model }) {
-  const label = configured ? 'Gemini ready' : configured === false ? 'Set GEMINI_API_KEY' : 'Checking config';
+  const label = configured ? 'Gemini configured' : configured === false ? 'Set GEMINI_API_KEY' : 'Checking model config';
   return (
     <div className={`status-pill ${configured ? 'ready' : configured === false ? 'warning' : ''}`}>
       <span>{label}</span>
@@ -778,10 +982,6 @@ function ValuationLine({ label, value }) {
   );
 }
 
-function prettyCategory(category = 'other') {
-  return category.replace(/_/g, ' ');
-}
-
 function renderStatusLabel(status) {
   if (status === 'complete') return 'Done';
   if (status === 'active') return 'Running';
@@ -816,20 +1016,35 @@ function formatByType(value, type, unitLabel) {
   return formatNumber(value, unitLabel);
 }
 
+function formatDelta(value, type, unitLabel) {
+  if (!Number.isFinite(Number(value))) return '—';
+  const prefix = Number(value) > 0 ? '+' : '';
+  return `${prefix}${formatByType(value, type, unitLabel)}`;
+}
+
 function capitalize(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function prettyCategory(value = 'other') {
+  return value.replace(/_/g, ' ');
+}
+
+function classificationLabel(value) {
+  if (value === 'review_required') return 'review required';
+  return value.replace(/_/g, ' ');
 }
 
 function forecastMetricRows(scenarioModel, unitLabel) {
   const rows = [
     { label: 'Revenue', key: 'revenue', format: 'number' },
-    { label: 'Revenue growth %', key: 'revenueGrowth', format: 'percent' },
-    { label: 'Gross margin %', key: 'grossMargin', format: 'percent' },
+    { label: 'Revenue growth', key: 'revenueGrowth', format: 'percent' },
+    { label: 'Gross margin', key: 'grossMargin', format: 'percent' },
     { label: 'Gross profit', key: 'grossProfit', format: 'number' },
-    { label: 'Operating margin %', key: 'operatingMargin', format: 'percent' },
+    { label: 'Operating margin', key: 'operatingMargin', format: 'percent' },
     { label: 'Operating income', key: 'operatingIncome', format: 'number' },
     { label: 'EBITDA', key: 'ebitda', format: 'number' },
-    { label: 'Tax rate %', key: 'taxRate', format: 'percent' },
+    { label: 'Tax rate', key: 'taxRate', format: 'percent' },
     { label: 'NOPAT', key: 'nopat', format: 'number' },
     { label: 'Capex', key: 'capex', format: 'number' },
     { label: 'D&A', key: 'da', format: 'number' },
@@ -844,63 +1059,39 @@ function forecastMetricRows(scenarioModel, unitLabel) {
 }
 
 function buildCopyPayload(kind, result) {
-  if (kind === 'summary') {
+  if (kind === 'takeaway') {
     return [
-      result.executiveSummary?.headline,
-      result.executiveSummary?.body,
-      ...(result.executiveSummary?.bullets || []).map((bullet) => `• ${bullet}`),
+      result.executiveTakeaway?.headline,
+      result.executiveTakeaway?.body,
+      ...(result.executiveTakeaway?.bullets || []).map((bullet) => `• ${bullet}`),
     ].filter(Boolean).join('\n');
   }
 
-  if (kind === 'forecast') {
-    return buildForecastTsv(result);
+  if (kind === 'changes') {
+    return buildEstimateChangeTsv(result);
   }
 
-  if (kind === 'valuation') {
-    return buildValuationTsv(result);
-  }
-
-  return [buildForecastTsv(result), '', buildValuationTsv(result)].join('\n');
+  return buildForecastTsv(result);
 }
 
 function buildCsvPayload(kind, result) {
   if (kind === 'forecast') {
-    return {
-      filename: 'forecast-table.csv',
-      content: buildForecastCsv(result),
-    };
+    return { filename: 'scenario-forecast.csv', content: buildForecastCsv(result) };
   }
-
   if (kind === 'valuation') {
-    return {
-      filename: 'valuation-table.csv',
-      content: buildValuationCsv(result),
-    };
+    return { filename: 'valuation-summary.csv', content: buildValuationCsv(result) };
   }
-
-  return {
-    filename: 'assumption-change-log.csv',
-    content: buildAssumptionsCsv(result),
-  };
+  return { filename: 'estimate-change-log.csv', content: buildEstimateChangeCsv(result) };
 }
 
-function buildForecastCsv(result) {
-  const lines = ['Scenario,Metric,' + horizonLabels.join(',')];
-  scenarioKeys.forEach((scenarioKey) => {
-    forecastMetricRows(result.modelPack.scenarios[scenarioKey], result.baseline.unitLabel).forEach((row) => {
-      lines.push([capitalize(scenarioKey), escapeCsv(row.label), ...row.values.map(escapeCsv)].join(','));
-    });
-  });
-  return lines.join('\n');
-}
-
-function buildAssumptionsCsv(result) {
-  const lines = ['Driver,Prior analyst baseline,Updated view,Rationale,Transcript evidence,Confidence,Review required'];
-  (result.assumptionDeltaLog || []).forEach((row) => {
+function buildEstimateChangeCsv(result) {
+  const lines = ['Driver,Prior view,Recommended change,Classification,Rationale,Evidence,Confidence,Review required'];
+  (result.estimateChangeLog || []).forEach((row) => {
     lines.push([
       row.driver,
-      row.priorAnalystBaseline,
-      row.updatedValue,
+      row.priorView,
+      row.recommendedChange,
+      row.classification,
       row.rationale,
       row.evidence,
       row.confidence,
@@ -910,50 +1101,45 @@ function buildAssumptionsCsv(result) {
   return lines.join('\n');
 }
 
-function buildValuationCsv(result) {
-  const lines = ['Scenario,Enterprise value,Equity value,Value per share,Terminal value,PV of terminal,WACC,Terminal growth,Exit EBITDA EV'];
+function buildForecastCsv(result) {
+  const lines = ['Scenario,Metric,' + horizonLabels.join(',')];
   scenarioKeys.forEach((scenarioKey) => {
-    const valuation = result.modelPack.scenarios[scenarioKey].valuation;
+    forecastMetricRows(result.modelPack.scenarios[scenarioKey], result.baselineUsed.unitLabel).forEach((row) => {
+      lines.push([capitalize(scenarioKey), escapeCsv(row.label), ...row.values.map(escapeCsv)].join(','));
+    });
+  });
+  return lines.join('\n');
+}
+
+function buildValuationCsv(result) {
+  const lines = ['Scenario,Enterprise value,Equity value,Value per share,WACC,Terminal growth'];
+  [['prior', result.modelPack.priorView.valuation], ...scenarioKeys.map((key) => [key, result.modelPack.scenarios[key].valuation])].forEach(([name, valuation]) => {
     lines.push([
-      capitalize(scenarioKey),
+      capitalize(name),
       valuation.enterpriseValue,
       valuation.equityValue,
       valuation.valuePerShare,
-      valuation.terminalValue,
-      valuation.pvTerminalValue,
       valuation.wacc,
       valuation.terminalGrowth,
-      valuation.exitMultipleValue,
     ].map(escapeCsv).join(','));
   });
   return lines.join('\n');
 }
 
-function buildForecastTsv(result) {
-  const rows = [['Scenario', 'Metric', ...horizonLabels]];
-  scenarioKeys.forEach((scenarioKey) => {
-    forecastMetricRows(result.modelPack.scenarios[scenarioKey], result.baseline.unitLabel).forEach((row) => {
-      rows.push([capitalize(scenarioKey), row.label, ...row.values]);
-    });
+function buildEstimateChangeTsv(result) {
+  const rows = [['Driver', 'Prior view', 'Recommended change', 'Classification', 'Rationale', 'Evidence', 'Confidence', 'Review required']];
+  (result.estimateChangeLog || []).forEach((row) => {
+    rows.push([row.driver, row.priorView, row.recommendedChange, row.classification, row.rationale, row.evidence, row.confidence, row.reviewRequired ? 'Yes' : 'No']);
   });
   return rows.map((row) => row.join('\t')).join('\n');
 }
 
-function buildValuationTsv(result) {
-  const rows = [['Scenario', 'Enterprise value', 'Equity value', 'Value per share', 'Terminal value', 'PV of terminal', 'WACC', 'Terminal growth', 'Exit EBITDA EV']];
+function buildForecastTsv(result) {
+  const rows = [['Scenario', 'Metric', ...horizonLabels]];
   scenarioKeys.forEach((scenarioKey) => {
-    const valuation = result.modelPack.scenarios[scenarioKey].valuation;
-    rows.push([
-      capitalize(scenarioKey),
-      formatNumber(valuation.enterpriseValue, result.baseline.unitLabel),
-      formatNumber(valuation.equityValue, result.baseline.unitLabel),
-      formatPerShare(valuation.valuePerShare, result.baseline.unitLabel),
-      formatNumber(valuation.terminalValue, result.baseline.unitLabel),
-      formatNumber(valuation.pvTerminalValue, result.baseline.unitLabel),
-      formatPercent(valuation.wacc),
-      formatPercent(valuation.terminalGrowth),
-      formatNumber(valuation.exitMultipleValue, result.baseline.unitLabel),
-    ]);
+    forecastMetricRows(result.modelPack.scenarios[scenarioKey], result.baselineUsed.unitLabel).forEach((row) => {
+      rows.push([capitalize(scenarioKey), row.label, ...row.values]);
+    });
   });
   return rows.map((row) => row.join('\t')).join('\n');
 }
@@ -967,16 +1153,19 @@ function escapeCsv(value) {
 }
 
 function copyLabel(kind) {
-  if (kind === 'summary') return 'Summary copied';
-  if (kind === 'forecast') return 'Forecast table copied';
-  if (kind === 'valuation') return 'Valuation table copied';
-  return 'Output copied';
+  if (kind === 'takeaway') return 'Executive takeaway copied';
+  if (kind === 'changes') return 'Estimate changes copied';
+  return 'Forecast table copied';
 }
 
 function downloadLabel(kind) {
   if (kind === 'forecast') return 'Forecast CSV downloaded';
   if (kind === 'valuation') return 'Valuation CSV downloaded';
-  return 'Assumptions CSV downloaded';
+  return 'Estimate change CSV downloaded';
+}
+
+function hasDocumentContent(document) {
+  return Boolean(document && ((document.inputMode === 'url' && document.url?.trim()) || (document.inputMode === 'text' && document.text?.trim())));
 }
 
 function toNumber(value) {

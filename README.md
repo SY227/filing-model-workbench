@@ -1,88 +1,76 @@
-# Earnings-to-Model Update Agent
+# Filing-to-Model Update Workbench
 
-A local prototype for outside analysts who want to go from an earnings transcript plus baseline assumptions to a transcript-backed forecast and valuation update.
+A filing-grounded external analyst workspace for turning the latest 10-Q or 10-K, optional earnings-call commentary, and prior baseline assumptions into a reviewable forecast and valuation update.
 
-## What changed in this version
+## Product framing
 
-The app is no longer centered on transcript commentary.
+This version is **filing-first, not transcript-first**.
 
-It now works as an **external analyst modeling workflow**:
+The filing is the factual base.
+The transcript is the optional but strongly recommended change-detection layer.
+The model math remains deterministic and inspectable.
 
-1. ingest a transcript from URL or pasted text
-2. enter baseline operating and valuation assumptions
-3. let Gemini propose structured scenario revisions
-4. run deterministic forecast and DCF math in code
-5. export model-ready tables and a reviewable report pack
+The product is designed to feel like institutional finance work product rather than a generic AI summary tool.
 
-## Core product flow
+## Workflow
 
-### Step 1: Transcript input
+1. add the latest **10-Q or 10-K** (required)
+2. add an **earnings transcript** if available (optional, recommended)
+3. add **supporting materials** such as the earnings release, deck, or shareholder letter (optional)
+4. review or adjust the prior baseline assumptions
+5. generate the model update pack
 
-- paste transcript URL, or
-- paste transcript text directly
+## What the system does
 
-### Step 2: Baseline analyst model input
+### Filing layer
 
-The app includes a structured baseline panel for:
+The backend treats the latest filing as the factual anchor and attempts to extract:
 
-- LTM revenue
-- FY+1 to FY+5 revenue growth
-- gross margin start and FY+5 target
-- operating margin start and FY+5 target
-- tax rate
-- capex % of revenue
-- D&A % of revenue
-- working capital % of revenue
-- WACC
-- terminal growth
-- share count
-- net debt / cash
-- exit EBITDA multiple
+- company, period, filing type, and filing date
+- reported revenue and margin context
+- capex, liquidity, debt, and share-count references
+- segment and risk disclosures
+- missing base inputs that still require analyst judgment
 
-### Step 3: Agentic workflow
+### Transcript layer
 
-Visible workflow stages:
+If a transcript is provided, the backend compares management commentary against the filing-grounded base to identify:
 
-- ingesting transcript
-- extracting management guidance and signals
-- mapping transcript evidence to model drivers
-- revising assumptions
-- building base / upside / downside forecast
-- running valuation view
-- preparing model update pack
+- guidance changes
+- demand, pricing, and volume commentary
+- margin and opex read-through
+- capex, working-capital, and cash-flow signal
+- tone, risks, and watch items
 
-### Step 4: Outputs
+### Model update layer
 
-The main outputs are now model-oriented:
+The system then:
 
-- executive model summary
-- assumption change log
-- deterministic forecast table
-- DCF-style valuation view
-- scenario comparison
-- transcript evidence and model driver mapping
-- review flags
-- exportable CSV and Excel-friendly copy blocks
+- validates the prior baseline against the filing where possible
+- proposes conservative estimate changes
+- runs deterministic scenario forecast math
+- computes DCF-style valuation output, valuation bridge steps, and sensitivities
+- packages the output into a banker-style report shell with evidence and review separation
 
 ## Stack
 
 - **Frontend:** React + Vite
 - **Backend:** Express
 - **Model:** Gemini 2.5 Flash Lite via Google Generative Language API
-- **Parsing:** server-side HTML fetching + text extraction with Cheerio
-- **Model math:** deterministic forecast + DCF logic in code
+- **Parsing:** server-side text and URL ingestion with HTML normalization via Cheerio
+- **Math:** deterministic forecast, DCF, valuation bridge, and sensitivity logic in code
 
 ## Run locally
 
 ```bash
-cd ~/Desktop/OpenClaw-Projects/earnings-to-model-update-agent
+cd /Users/sy1127/Desktop/OpenClaw-Projects/earnings-to-model-update-agent
 cp .env.example .env
 # add your Gemini API key to .env
 npm install
 npm run dev
 ```
 
-Then open:
+Open:
 
 - Frontend: `http://localhost:5173`
 - Backend health: `http://localhost:8787/api/health`
@@ -99,100 +87,105 @@ PORT=8787
 
 `GEMINI_MODEL` is optional. The app defaults to `gemini-2.5-flash-lite`.
 
-## Revised architecture
+## Architecture
 
 ### Frontend
 
-The React app now behaves like a modeling workspace, not a transcript summary screen.
+The React app is organized as a professional workbench with:
 
-It includes:
-
-- transcript ingestion UI
-- structured analyst baseline assumptions panel
-- multi-step progress rail
+- filing-first source inputs
+- optional transcript and supporting-material inputs
+- prior baseline assumption editor
+- streamed workflow progress
+- banker-style report sections
 - forecast and valuation tables
-- scenario selector
-- CSV download actions
-- Excel-friendly copy actions
-- transcript evidence and review sections
+- CSV and clipboard export actions
+- source appendix for review
 
 ### Backend
 
 The Express server handles:
 
-- transcript fetching and cleanup
-- transcript normalization
-- Gemini extraction pass
-- Gemini model-revision pass
-- deterministic forecast and DCF calculations
-- SSE streaming stage updates back to the client
+- filing ingestion and normalization
+- transcript ingestion and normalization
+- supporting-material ingestion
+- filing extraction prompt
+- transcript delta prompt
+- integrated model update prompt
+- report-formatting prompt
+- deterministic math pass
+- SSE stage streaming to the client
 
-## Gemini reasoning vs deterministic math
-
-This split is the core of the product.
+## Reasoning split: Gemini vs deterministic math
 
 ### Gemini is used for
 
-- extracting transcript metadata and themes
-- identifying guidance and model-relevant signals
-- mapping transcript evidence to modeling drivers
-- proposing conservative scenario revisions
-- generating the executive model summary and review trail
+- filing extraction and factual structuring
+- transcript delta detection
+- estimate change recommendations
+- evidence classification
+- scenario rationale and concise banker-style copy
+- review flags, watch items, and checklist generation
 
 ### Code is used for
 
 - baseline normalization
-- multi-year forecast roll-forward
-- gross margin and operating margin path construction
+- selective filing-based baseline backfill where defaults remain in place
+- scenario forecast roll-forward
+- margin path interpolation
 - NOPAT and free cash flow approximation
-- DCF-style enterprise value and equity value math
+- DCF-style enterprise value and equity value
 - implied value per share
-- scenario comparison tables
+- valuation bridge steps
 - sensitivity table generation
-- CSV export formatting
+- CSV and clipboard export formatting
 
-This keeps judgment and language in the model layer, while keeping the actual math deterministic and inspectable.
+This keeps judgment in the model layer and keeps the math inspectable and deterministic.
 
-## Deterministic model math implemented
+## Core output sections
 
-The current deterministic layer includes:
+The app now produces a sharper institutional-style output structure:
 
-- revenue roll-forward from baseline + scenario growth deltas
-- gross margin and operating margin paths across FY+1 to FY+5
-- operating income, EBITDA, tax, NOPAT
-- capex, D&A, working capital impact
-- free cash flow
-- DCF-style enterprise value
-- equity value and value per share
-- base-case EV sensitivity matrix
+1. Executive takeaway
+2. Key filing and call takeaways
+3. What changed vs prior view
+4. Filing-grounded base assumptions
+5. Recommended estimate changes
+6. Scenario forecast
+7. Valuation summary
+8. Valuation bridge and key sensitivities
+9. Evidence map
+10. Review flags and analyst judgment
+11. Model update checklist
+12. Source appendix
 
 ## Implemented
 
-- working transcript URL ingestion with graceful failure
-- working pasted transcript ingestion
-- structured baseline assumptions panel
-- transcript-to-driver mapping
-- Gemini-driven scenario adjustment proposals
-- deterministic base / upside / downside forecast math
-- deterministic DCF-style valuation output
-- valuation comparison across scenarios
-- CSV downloads for forecast, assumptions, and valuation
-- copy-ready forecast and valuation tables for Excel
-- transcript evidence section with explicit vs inferred separation
-- review flags and model update checklist
-- harmony-green visual refresh
+- filing-first workflow and request shape
+- required filing input with optional transcript and supporting materials
+- filing extraction prompt returning reported base and missing inputs
+- transcript delta prompt returning change-detection output when a call is provided
+- integrated model update prompt returning estimate changes and scenario adjustments
+- report-formatting prompt for sharper executive output
+- deterministic prior-view, base, upside, and downside forecast math
+- deterministic valuation bridge and sensitivity table
+- source appendix and clearer evidence classification
+- institutional, restrained UI redesign
+- CSV exports for estimate changes, forecast, and valuation summary
+- clipboard-friendly takeaway, estimate-change, and forecast blocks
 
-## Simplified
+## Intentionally deferred rather than faked
 
-- URL parsing is heuristic rather than site-specific
-- no persistence or user accounts
-- no direct spreadsheet writeback
-- no fully general three-statement model
-- DCF uses a practical external-analyst approximation layer instead of company-specific detailed line items
-- very long transcripts are truncated before model submission rather than chunk-orchestrated
+- PDF upload and parsing
+- site-specific SEC parsing logic beyond best-effort text extraction
+- spreadsheet writeback
+- a full three-statement model
+- persistence, auth, or saved workspaces
+
+These are omitted rather than mocked.
 
 ## Notes
 
-- The product is conservative by design. It avoids false precision and treats transcript language as evidence, not certainty.
-- The app is designed for outside analysts. It does not assume internal company planning access.
-- If transcript extraction from a URL fails, the app tells the user to use the paste-text path instead of silently breaking.
+- The app is an external-analyst approximation layer, not a claim of full model completeness.
+- The filing is treated as the factual base. The transcript, when provided, mainly affects the forward setup and estimate revisions.
+- The product avoids false precision and keeps reported, stated, inferred, and review-required items distinct.

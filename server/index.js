@@ -1,11 +1,29 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import * as cheerio from 'cheerio';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
-import { buildModelPack, normalizeBaseline, normalizeScenarioAdjustments } from './modeling.js';
+import {
+  buildModelPack,
+  DEFAULT_BASELINE,
+  normalizeBaseline,
+  normalizeScenarioAdjustments,
+  YEAR_LABELS,
+} from './modeling.js';
+import {
+  buildSourcePacketForPrompt,
+  buildSupportingPacketForPrompt,
+  ingestSource,
+  ingestSupportingSources,
+  summarizeSource,
+} from './sourceNormalization.js';
+import {
+  buildFilingExtractionPrompt,
+  buildIntegratedUpdatePrompt,
+  buildReportFormattingPrompt,
+  buildTranscriptDeltaPrompt,
+} from './promptSchemas.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -16,10 +34,9 @@ const app = express();
 const port = Number(process.env.PORT || 8787);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-const MAX_TRANSCRIPT_CHARS = 75_000;
 
 app.use(cors());
-app.use(express.json({ limit: '4mb' }));
+app.use(express.json({ limit: '6mb' }));
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -52,67 +69,128 @@ app.post('/api/process', async (req, res) => {
 
   try {
     if (!GEMINI_API_KEY) {
-      throw new Error('Missing GEMINI_API_KEY. Add it to your .env before processing transcripts.');
+      throw new Error('Missing GEMINI_API_KEY. Add it to your .env before generating a model update pack.');
     }
 
-    const { inputMode, url, transcript, baseline } = req.body ?? {};
-    if (!inputMode || !['url', 'text'].includes(inputMode)) {
-      throw new Error('Please choose either transcript URL or pasted transcript text.');
+    const { filing, transcript, supportingMaterials = [], baseline } = req.body ?? {};
+    if (!filing) {
+      throw new Error('A latest 10-Q or 10-K input is required.');
     }
 
-    const analystBaseline = normalizeBaseline(baseline);
+    const analystBaseline = normalizeBaseline(baseline || {});
 
-    markStage('ingest', 'Ingesting transcript', inputMode === 'url' ? 'Fetching and cleaning transcript page' : 'Cleaning pasted transcript');
-    const ingestion = inputMode === 'url' ? await fetchTranscriptFromUrl(url) : ingestPastedTranscript(transcript);
+    markStage('filing', 'Ingesting filing', 'Fetching or normalizing the latest 10-Q or 10-K');
+    const filingSource = await ingestSource(
+      {
+        ...filing,
+        kind: 'filing',
+        label: 'Filing',
+      },
+      { required: true, minChars: 700 }
+    );
 
-    if (!ingestion.cleanedText || ingestion.cleanedText.length < 1200) {
-      throw new Error(
-        inputMode === 'url'
-          ? 'I could not extract enough readable transcript text from that page. Try the paste-text path instead.'
-          : 'The pasted transcript is too short to analyze. Paste a longer transcript excerpt.'
+    markStage('support', 'Ingesting supporting materials', 'Adding optional release, deck, letter, or management commentary where provided');
+    const supportSources = await ingestSupportingSources(
+      Array.isArray(supportingMaterials)
+        ? supportingMaterials.map((item) => ({
+            ...item,
+            kind: item.kind || 'supporting_material',
+            label: materialLabel(item.kind || 'supporting_material'),
+          }))
+        : []
+    );
+
+    markStage('reported', 'Extracting filing-grounded base', 'Identifying reported facts, disclosed constraints, and missing base inputs');
+    const filingExtraction = await callGeminiJson(
+      buildFilingExtractionPrompt({
+        filing: buildSourcePacketForPrompt(filingSource, 20_000),
+        supportingMaterials: buildSupportingPacketForPrompt(supportSources),
+        baseline: analystBaseline,
+      }),
+      0.1
+    );
+
+    const baselineUsed = mergeBaselineWithReportedBase(analystBaseline, filingExtraction);
+
+    let transcriptSource = null;
+    let transcriptDelta = buildTranscriptSkippedResult();
+
+    markStage(
+      'delta',
+      'Assessing transcript delta',
+      transcript && hasInputContent(transcript)
+        ? 'Comparing management commentary against the filing-grounded base'
+        : 'No transcript supplied. Forward read-through will rely on filing and supporting materials.'
+    );
+
+    if (transcript && hasInputContent(transcript)) {
+      transcriptSource = await ingestSource(
+        {
+          ...transcript,
+          kind: 'transcript',
+          label: 'Transcript',
+        },
+        { required: false }
       );
+
+      if (transcriptSource?.cleanedText?.length >= 900) {
+        transcriptDelta = await callGeminiJson(
+          buildTranscriptDeltaPrompt({
+            filingExtraction,
+            transcript: buildSourcePacketForPrompt(transcriptSource, 16_000),
+            supportingMaterials: buildSupportingPacketForPrompt(supportSources),
+          }),
+          0.15
+        );
+      }
     }
 
-    const transcriptForModel = clampTranscript(ingestion.cleanedText, MAX_TRANSCRIPT_CHARS);
+    markStage('integrate', 'Integrating filing, call, and support materials', 'Building a reviewable estimate revision layer against the prior baseline');
+    const integratedUpdate = await callGeminiJson(
+      buildIntegratedUpdatePrompt({
+        filingExtraction,
+        transcriptDelta,
+        supportingMaterials: buildSupportingPacketForPrompt(supportSources),
+        baseline: baselineUsed,
+      }),
+      0.2
+    );
 
-    markStage('signals', 'Extracting management guidance and signals', 'Pulling transcript-backed guidance, themes, and evidence');
-    const extraction = await runExtractionPass({
-      transcript: transcriptForModel,
-      sourceUrl: ingestion.sourceUrl,
-      pageTitle: ingestion.title,
-      fallbackMetadata: ingestion.fallbackMetadata,
-    });
-
-    markStage('drivers', 'Mapping transcript evidence to model drivers', 'Linking transcript evidence to revenue, margin, capex, and valuation inputs');
-    markStage('revise', 'Revising assumptions', 'Using Gemini to propose conservative scenario adjustments against the analyst baseline');
-    const modelProposal = await runModelPass({
-      transcript: transcriptForModel,
-      extraction,
-      sourceUrl: ingestion.sourceUrl,
-      baseline: analystBaseline,
-    });
-
-    markStage('forecast', 'Building base / upside / downside forecast', 'Rolling assumptions through deterministic forecast math');
+    markStage('forecast', 'Running deterministic scenario forecast', 'Rolling the revised assumptions through inspectable code-driven model math');
     const modelPack = buildModelPack({
-      baseline: analystBaseline,
+      baseline: baselineUsed,
       scenarioAdjustments: {
-        base: normalizeScenarioAdjustments(modelProposal?.scenarioAdjustments?.base),
-        upside: normalizeScenarioAdjustments(modelProposal?.scenarioAdjustments?.upside),
-        downside: normalizeScenarioAdjustments(modelProposal?.scenarioAdjustments?.downside),
+        base: normalizeScenarioAdjustments(integratedUpdate?.scenarioAdjustments?.base),
+        upside: normalizeScenarioAdjustments(integratedUpdate?.scenarioAdjustments?.upside),
+        downside: normalizeScenarioAdjustments(integratedUpdate?.scenarioAdjustments?.downside),
       },
     });
 
-    markStage('valuation', 'Running valuation view', 'Computing DCF-style enterprise value, equity value, and per-share outputs');
-    markStage('pack', 'Preparing model update pack', 'Formatting model outputs, evidence trail, and exportable tables');
+    markStage('valuation', 'Running valuation bridge and sensitivities', 'Computing scenario valuation, bridge impacts, and sensitivity framing');
+    const reportPack = await callGeminiJson(
+      buildReportFormattingPrompt({
+        filingExtraction,
+        transcriptDelta,
+        integratedUpdate,
+        modelSummary: buildModelSummaryForPrompt(modelPack),
+      }),
+      0.2
+    );
 
+    markStage('pack', 'Preparing model update pack', 'Assembling banker-style sections, evidence classification, and exportable tables');
     const result = buildResult({
-      ingestion,
-      extraction,
-      modelProposal,
+      filingSource,
+      transcriptSource,
+      supportSources,
+      filingExtraction,
+      transcriptDelta,
+      integratedUpdate,
+      reportPack,
       modelPack,
       stageTimings,
       model: GEMINI_MODEL,
-      baseline: analystBaseline,
+      baselineInput: analystBaseline,
+      baselineUsed,
     });
 
     stageTimings[stageTimings.length - 1].durationMs = Date.now() - currentStageStart;
@@ -121,7 +199,7 @@ app.post('/api/process', async (req, res) => {
     send('done', { ok: true, totalDurationMs: Date.now() - startedAt });
   } catch (error) {
     send('error', {
-      message: error.message || 'Something went wrong while processing the transcript.',
+      message: error.message || 'Something went wrong while generating the model update pack.',
     });
   } finally {
     res.end();
@@ -137,7 +215,7 @@ if (fs.existsSync(distPath)) {
 }
 
 app.listen(port, () => {
-  console.log(`Earnings-to-Model Update Agent server listening on http://localhost:${port}`);
+  console.log(`Filing-to-Model Update Workbench server listening on http://localhost:${port}`);
 });
 
 function setupSseHeaders(res) {
@@ -145,352 +223,6 @@ function setupSseHeaders(res) {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
-}
-
-function ingestPastedTranscript(transcript) {
-  if (!transcript || typeof transcript !== 'string') {
-    throw new Error('Paste transcript text to continue.');
-  }
-
-  const cleanedText = normalizeTranscriptText(transcript);
-  const fallbackMetadata = inferMetadataFromText(cleanedText, 'Pasted transcript');
-
-  return {
-    sourceType: 'text',
-    sourceUrl: null,
-    title: fallbackMetadata.title,
-    rawText: transcript,
-    cleanedText,
-    fallbackMetadata,
-  };
-}
-
-async function fetchTranscriptFromUrl(url) {
-  if (!url || typeof url !== 'string') {
-    throw new Error('Paste a transcript URL to continue.');
-  }
-
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('That URL does not look valid.');
-  }
-
-  const response = await fetch(parsed.toString(), {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; EarningsToModelAgent/1.0; +https://localhost)',
-      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Could not fetch the transcript page (${response.status} ${response.statusText}).`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  const raw = await response.text();
-
-  let title = parsed.hostname;
-  let extractedText = raw;
-
-  if (contentType.includes('html')) {
-    const { cleanedText, extractedTitle } = extractTextFromHtml(raw);
-    extractedText = cleanedText;
-    title = extractedTitle || title;
-  }
-
-  const cleanedText = normalizeTranscriptText(extractedText);
-  const fallbackMetadata = inferMetadataFromText(cleanedText, title);
-
-  return {
-    sourceType: 'url',
-    sourceUrl: parsed.toString(),
-    title,
-    rawText: raw,
-    cleanedText,
-    fallbackMetadata,
-  };
-}
-
-function extractTextFromHtml(html) {
-  const $ = cheerio.load(html);
-  $('script, style, noscript, iframe, svg, img, figure, form, button, nav, footer, header, aside').remove();
-
-  const extractedTitle =
-    $('meta[property="og:title"]').attr('content') ||
-    $('meta[name="twitter:title"]').attr('content') ||
-    $('title').first().text().trim() ||
-    $('h1').first().text().trim() ||
-    '';
-
-  const candidateSelectors = [
-    'article',
-    'main',
-    '[role="main"]',
-    '.transcript',
-    '#transcript',
-    '.article-body',
-    '.main-content',
-    '.content',
-    'body',
-  ];
-
-  const candidates = candidateSelectors
-    .map((selector) => {
-      const node = $(selector).first();
-      if (!node.length) return null;
-      const blocks = [];
-      node.find('h1, h2, h3, h4, p, li, pre, blockquote').each((_idx, el) => {
-        const text = $(el).text().replace(/\s+/g, ' ').trim();
-        if (text.length >= 30) blocks.push(text);
-      });
-      if (blocks.length < 8) {
-        const rawText = node.text().replace(/\s+/g, ' ').trim();
-        if (rawText.length > 1000) blocks.push(rawText);
-      }
-      return { selector, text: blocks.join('\n\n') };
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.text.length - a.text.length);
-
-  const cleanedText = candidates[0]?.text || $.root().text();
-  return { cleanedText, extractedTitle };
-}
-
-function normalizeTranscriptText(text) {
-  return String(text || '')
-    .replace(/\r/g, '')
-    .replace(/\u00a0/g, ' ')
-    .replace(/[\t ]+/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line, index, lines) => {
-      if (!line) return true;
-      const lower = line.toLowerCase();
-      const junkPatterns = [/^advertisement$/, /^click here to /, /^read more$/, /^sign up$/, /^related articles$/];
-      if (junkPatterns.some((pattern) => pattern.test(lower))) return false;
-      if (index > 0 && lines[index - 1]?.trim() === line) return false;
-      return true;
-    })
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function inferMetadataFromText(text, title = '') {
-  const firstChunk = `${title}\n${text.slice(0, 2500)}`;
-  const quarterMatch = firstChunk.match(/\b(Q[1-4]|first quarter|second quarter|third quarter|fourth quarter)\s*(FY\s*)?(20\d{2})?\b/i);
-  const dateMatch = firstChunk.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+20\d{2}\b/i);
-  const companyMatch = title.match(/^(.+?)(?:\s+(?:Q[1-4]|First Quarter|Second Quarter|Third Quarter|Fourth Quarter|Earnings|Transcript|Conference Call))/i);
-
-  return {
-    title: title || deriveTitleFromTranscript(text),
-    company: companyMatch?.[1]?.trim() || null,
-    quarter: quarterMatch?.[0] || null,
-    callDate: dateMatch?.[0] || null,
-  };
-}
-
-function deriveTitleFromTranscript(text) {
-  const lines = text.split('\n').filter(Boolean).slice(0, 6);
-  return lines.find((line) => line.length > 18 && line.length < 120) || 'Transcript analysis';
-}
-
-function clampTranscript(text, maxChars) {
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars)}\n\n[Transcript truncated after ${maxChars.toLocaleString()} characters for model processing.]`;
-}
-
-async function runExtractionPass({ transcript, sourceUrl, pageTitle, fallbackMetadata }) {
-  const prompt = `You are an external-investor earnings transcript extraction agent.
-
-Your job is to convert transcript content into structured evidence for an outside analyst updating an operating forecast and valuation model.
-
-Rules:
-- return strict JSON only
-- do not wrap the JSON in markdown
-- do not invent exact figures unless management explicitly stated them
-- separate explicit statements from inferred implications
-- keep language concise, finance-specific, and grounded in transcript evidence
-
-Required JSON shape:
-{
-  "metadata": {
-    "company": string | null,
-    "quarter": string | null,
-    "callDate": string | null,
-    "title": string | null,
-    "managementTone": {
-      "label": "constructive" | "mixed" | "cautious" | "negative" | "neutral",
-      "rationale": string
-    },
-    "majorThemes": string[]
-  },
-  "keySignals": [
-    {
-      "category": "guidance" | "revenue" | "margin" | "demand" | "opex" | "capex" | "geography_segment" | "macro" | "risk" | "cash_flow" | "other",
-      "title": string,
-      "summary": string,
-      "evidence": string,
-      "explicitness": "explicit" | "inferred",
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "modelDriverMap": [
-    {
-      "driver": "revenue_growth" | "pricing" | "volume" | "gross_margin" | "operating_margin" | "capex" | "cash_flow" | "valuation_sensitivity" | "macro" | "geography_segment",
-      "impact": "positive" | "negative" | "mixed" | "neutral",
-      "summary": string,
-      "evidence": string,
-      "explicitness": "explicit" | "inferred",
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "explicitStatements": [
-    {
-      "statement": string,
-      "evidence": string,
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "inferredImplications": [
-    {
-      "implication": string,
-      "whyItMatters": string,
-      "evidence": string,
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "reviewFlags": [
-    {
-      "item": string,
-      "reason": string,
-      "evidence": string,
-      "confidence": "high" | "medium" | "low"
-    }
-  ]
-}
-
-Context:
-- Source URL: ${sourceUrl || 'n/a'}
-- Page title: ${pageTitle || 'n/a'}
-- Fallback metadata: ${JSON.stringify(fallbackMetadata)}
-
-Transcript:
-${transcript}`;
-
-  return callGeminiJson(prompt, 0.1);
-}
-
-async function runModelPass({ transcript, extraction, sourceUrl, baseline }) {
-  const prompt = `You are a finance modeling agent for outside analysts.
-
-Your job is to translate transcript evidence into conservative scenario adjustments against an analyst's baseline model. The output must be reviewable and suitable for deterministic forecast math.
-
-Rules:
-- return strict JSON only
-- do not wrap the JSON in markdown
-- use transcript evidence, not wishful thinking
-- do not fabricate exact precision unless supported; if uncertain, use small or zero adjustments and flag review
-- assume the user is an external investor or analyst, not an internal FP&A team
-- keep updates conservative and realistic for a first-pass post-earnings model refresh
-- for numerical scenario adjustments, stay within these bounds unless transcript evidence is unusually clear:
-  - revenue growth deltas: between -8 and +8 percentage points
-  - margin deltas: between -600 and +600 bps
-  - capex / D&A / tax / working capital deltas: between -300 and +300 bps unless clearly justified
-  - WACC deltas: between -75 and +75 bps
-  - terminal growth deltas: between -50 and +50 bps
-
-Required JSON shape:
-{
-  "executiveModelSummary": {
-    "headline": string,
-    "body": string,
-    "bullets": string[]
-  },
-  "assumptionDeltaLog": [
-    {
-      "driver": string,
-      "priorAnalystBaseline": string,
-      "updatedValue": string,
-      "rationale": string,
-      "evidence": string,
-      "confidence": "high" | "medium" | "low",
-      "reviewRequired": true | false
-    }
-  ],
-  "scenarioAdjustments": {
-    "base": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    },
-    "upside": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    },
-    "downside": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    }
-  },
-  "modelUpdateChecklist": [
-    {
-      "task": string,
-      "ownerHint": string,
-      "priority": "high" | "medium" | "low"
-    }
-  ],
-  "reviewTrail": [
-    {
-      "item": string,
-      "classification": "explicit" | "inferred",
-      "confidence": "high" | "medium" | "low",
-      "whyReview": string
-    }
-  ]
-}
-
-Analyst baseline assumptions:
-${JSON.stringify(baseline, null, 2)}
-
-Transcript extraction JSON:
-${JSON.stringify(extraction, null, 2)}
-
-Source URL: ${sourceUrl || 'n/a'}
-
-Transcript:
-${transcript}`;
-
-  return callGeminiJson(prompt, 0.2);
 }
 
 async function callGeminiJson(prompt, temperature = 0.2) {
@@ -526,56 +258,162 @@ async function callGeminiJson(prompt, temperature = 0.2) {
   }
 }
 
-function buildResult({ ingestion, extraction, modelProposal, modelPack, stageTimings, model, baseline }) {
-  const metadata = {
-    company: extraction?.metadata?.company || ingestion.fallbackMetadata.company || baseline.companyName || null,
-    quarter: extraction?.metadata?.quarter || ingestion.fallbackMetadata.quarter || null,
-    callDate: extraction?.metadata?.callDate || ingestion.fallbackMetadata.callDate || null,
-    title: extraction?.metadata?.title || ingestion.title || ingestion.fallbackMetadata.title,
-    managementTone: extraction?.metadata?.managementTone || { label: 'neutral', rationale: 'Tone not confidently inferred.' },
-    majorThemes: extraction?.metadata?.majorThemes || [],
-  };
+function mergeBaselineWithReportedBase(baseline, filingExtraction) {
+  const metrics = filingExtraction?.reportedBase?.normalizedMetrics || {};
+  const merged = { ...baseline };
 
-  const reviewFlags = dedupeByText([
-    ...(extraction?.reviewFlags || []),
-    ...((modelProposal?.reviewTrail || []).filter((item) => item.confidence === 'low').map((item) => ({
-      item: item.item,
-      reason: item.whyReview,
-      evidence: 'Low-confidence implication from model pass.',
+  if (!merged.companyName && filingExtraction?.filingMetadata?.company) merged.companyName = filingExtraction.filingMetadata.company;
+  if (merged.currentRevenue === DEFAULT_BASELINE.currentRevenue && Number.isFinite(metrics.revenueLtm)) merged.currentRevenue = metrics.revenueLtm;
+  if (merged.shareCount === DEFAULT_BASELINE.shareCount && Number.isFinite(metrics.shareCount)) merged.shareCount = metrics.shareCount;
+  if (merged.netDebt === DEFAULT_BASELINE.netDebt && Number.isFinite(metrics.netDebt)) merged.netDebt = metrics.netDebt;
+  if (merged.taxRate === DEFAULT_BASELINE.taxRate && Number.isFinite(metrics.taxRatePct)) merged.taxRate = metrics.taxRatePct;
+  if (merged.grossMarginStart === DEFAULT_BASELINE.grossMarginStart && Number.isFinite(metrics.grossMarginPct)) {
+    merged.grossMarginStart = metrics.grossMarginPct;
+  }
+  if (merged.operatingMarginStart === DEFAULT_BASELINE.operatingMarginStart && Number.isFinite(metrics.operatingMarginPct)) {
+    merged.operatingMarginStart = metrics.operatingMarginPct;
+  }
+  if (merged.capexPct === DEFAULT_BASELINE.capexPct && Number.isFinite(metrics.capexPctRevenue)) merged.capexPct = metrics.capexPctRevenue;
+
+  return normalizeBaseline(merged);
+}
+
+function buildTranscriptSkippedResult() {
+  return {
+    transcriptMetadata: {
+      title: null,
+      callDate: null,
+      managementTone: {
+        label: 'neutral',
+        rationale: 'No transcript supplied. Forward read-through relies on the filing and any supporting materials.',
+      },
+    },
+    callTakeaways: [],
+    transcriptDelta: {
+      overview: 'No earnings transcript was provided. The model update relies primarily on the filing-grounded base and any supporting materials.',
+      changes: [],
+    },
+    watchItems: [],
+  };
+}
+
+function buildModelSummaryForPrompt(modelPack) {
+  const comparison = modelPack.comparison.map((row) => ({
+    metric: row.metric,
+    prior: row.prior,
+    base: row.base,
+    upside: row.upside,
+    downside: row.downside,
+    format: row.format,
+  }));
+
+  return {
+    years: YEAR_LABELS,
+    comparison,
+    changeVsPrior: modelPack.changeVsPrior,
+    baseValuation: modelPack.scenarios.base.valuation,
+    upsideValuation: modelPack.scenarios.upside.valuation,
+    downsideValuation: modelPack.scenarios.downside.valuation,
+    valuationBridge: modelPack.valuationBridge,
+  };
+}
+
+function buildResult({
+  filingSource,
+  transcriptSource,
+  supportSources,
+  filingExtraction,
+  transcriptDelta,
+  integratedUpdate,
+  reportPack,
+  modelPack,
+  stageTimings,
+  model,
+  baselineInput,
+  baselineUsed,
+}) {
+  const evidenceMap = dedupeEvidence([
+    ...(filingExtraction?.evidenceMap || []),
+    ...((transcriptDelta?.transcriptDelta?.changes || []).map((item) => ({
+      driver: item.driver,
+      source: 'transcript',
+      classification: mapTranscriptClassification(item.classification),
+      summary: item.summary,
+      evidence: item.evidence,
       confidence: item.confidence,
     })) || []),
-  ], 'item');
+    ...((integratedUpdate?.estimateChangeLog || []).map((item) => ({
+      driver: item.driver,
+      source: 'integrated_model',
+      classification: item.classification,
+      summary: item.recommendedChange,
+      evidence: item.evidence,
+      confidence: item.confidence,
+    })) || []),
+  ]);
+
+  const reviewFlags = dedupeByText(
+    [
+      ...(integratedUpdate?.reviewFlags || []),
+      ...((transcriptDelta?.watchItems || []).map((item) => ({
+        item: item.item,
+        reason: item.whyItMatters,
+        evidence: 'Watch item surfaced from transcript comparison.',
+        confidence: item.confidence,
+      })) || []),
+    ],
+    'item'
+  );
 
   return {
     generatedAt: new Date().toISOString(),
     model,
-    source: {
-      inputMode: ingestion.sourceType,
-      url: ingestion.sourceUrl,
-      title: ingestion.title,
-      transcriptChars: ingestion.cleanedText.length,
-      transcriptPreview: ingestion.cleanedText.slice(0, 2800),
-      transcriptFull: ingestion.cleanedText,
+    filingMetadata: filingExtraction?.filingMetadata || filingSource.fallbackMetadata,
+    transcriptMetadata: transcriptDelta?.transcriptMetadata || buildTranscriptSkippedResult().transcriptMetadata,
+    sources: {
+      filing: summarizeSource(filingSource),
+      transcript: summarizeSource(transcriptSource),
+      supportingMaterials: supportSources.map(summarizeSource),
     },
-    metadata,
-    baseline,
-    executiveSummary: modelProposal?.executiveModelSummary || {},
-    keySignals: extraction?.keySignals || [],
-    modelDriverMap: extraction?.modelDriverMap || [],
-    assumptionDeltaLog: modelProposal?.assumptionDeltaLog || [],
-    scenarioNotes: {
-      base: modelPack.scenarios.base.narrative,
-      upside: modelPack.scenarios.upside.narrative,
-      downside: modelPack.scenarios.downside.narrative,
-    },
+    baselineInput,
+    baselineUsed,
+    executiveTakeaway: reportPack?.executiveTakeaway || {},
+    keyTakeaways: reportPack?.keyTakeaways || [],
+    filingTakeaways: filingExtraction?.filingTakeaways || [],
+    callTakeaways: transcriptDelta?.callTakeaways || [],
+    changeVsPriorView: integratedUpdate?.changeVsPriorView || { summary: '', bullets: [] },
+    reportedBase: filingExtraction?.reportedBase || {},
+    filingGroundedBase: integratedUpdate?.filingGroundedBase || { summary: '', assumptionChecks: [] },
+    estimateChangeLog: integratedUpdate?.estimateChangeLog || [],
+    scenarioWriteups: reportPack?.scenarioWriteups || {},
     modelPack,
-    explicitStatements: extraction?.explicitStatements || [],
-    inferredImplications: extraction?.inferredImplications || [],
+    valuationImplications: integratedUpdate?.valuationImplications || { summary: '', bridgeDrivers: [] },
+    valuationSummary: reportPack?.valuationSummary || { summary: '', bridgeCommentary: '' },
+    evidenceMap,
     reviewFlags,
-    modelUpdateChecklist: modelProposal?.modelUpdateChecklist || [],
-    reviewTrail: modelProposal?.reviewTrail || [],
+    watchItems: [
+      ...(integratedUpdate?.watchItems || []),
+      ...((reportPack?.whatWouldChangeMyView || []).map((item) => ({ item, whyItMatters: 'What would change the view', confidence: 'medium' })) || []),
+    ],
+    checklist: integratedUpdate?.checklist || [],
     stageTimings,
   };
+}
+
+function mapTranscriptClassification(value) {
+  if (value === 'stated') return 'stated';
+  if (value === 'review_required') return 'review_required';
+  return 'inferred';
+}
+
+function dedupeEvidence(items) {
+  const seen = new Set();
+  return items.filter((item) => {
+    const key = `${item.driver}|${item.summary}`.trim().toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function dedupeByText(items, field) {
@@ -586,4 +424,16 @@ function dedupeByText(items, field) {
     seen.add(value);
     return true;
   });
+}
+
+function hasInputContent(source) {
+  return Boolean(source && (String(source.url || '').trim() || String(source.text || '').trim()));
+}
+
+function materialLabel(kind) {
+  if (kind === 'earnings_release') return 'Earnings release';
+  if (kind === 'shareholder_letter') return 'Shareholder letter';
+  if (kind === 'investor_presentation') return 'Investor presentation';
+  if (kind === 'management_commentary') return 'Management commentary';
+  return 'Supporting material';
 }
