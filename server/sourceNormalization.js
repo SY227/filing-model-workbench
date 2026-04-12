@@ -1,28 +1,79 @@
 import * as cheerio from 'cheerio';
+import { fetchSecFiling } from './secLookup.js';
 
 const MAX_TEXT_PREVIEW = 3_000;
 
-export async function ingestSource(source, options = {}) {
+export async function ingestSource(filingRequest, options = {}) {
   const { required = false, minChars = 1200 } = options;
-  const inputMode = source?.inputMode;
-  const kind = source?.kind || 'document';
-  const label = source?.label || kind;
+  const normalizedRequest = normalizeFilingRequest(filingRequest);
+  const kind = normalizedRequest?.kind || 'document';
+  const label = normalizedRequest?.label || kind;
 
-  if (!inputMode) {
+  if (!normalizedRequest?.mode) {
     if (required) throw new Error(`${label} input is required.`);
     return null;
   }
 
-  const normalizedSource =
-    inputMode === 'url'
-      ? await fetchSourceFromUrl(source.url, { kind, label, titleOverride: source.title })
-      : ingestPastedText(source.text, { kind, label, title: source.title });
+  let normalizedSource;
+  if (normalizedRequest.mode === 'ticker_lookup') {
+    normalizedSource = await fetchSourceFromTicker(normalizedRequest, { kind, label });
+  } else if (normalizedRequest.mode === 'url') {
+    normalizedSource = await fetchSourceFromUrl(normalizedRequest.url, { kind, label, titleOverride: normalizedRequest.title });
+  } else if (normalizedRequest.mode === 'text') {
+    normalizedSource = ingestPastedText(normalizedRequest.text, { kind, label, title: normalizedRequest.title });
+  } else {
+    throw new Error(`Unsupported filing request mode: ${normalizedRequest.mode}`);
+  }
 
   if (required && (!normalizedSource.cleanedText || normalizedSource.cleanedText.length < minChars)) {
     throw new Error(`${label} did not contain enough readable text. Paste the text directly if URL extraction is weak.`);
   }
 
   return normalizedSource;
+}
+
+export function normalizeFilingRequest(filingRequest) {
+  if (!filingRequest) return null;
+
+  const legacyInputMode = filingRequest.inputMode;
+  if (legacyInputMode === 'ticker') {
+    return {
+      mode: 'ticker_lookup',
+      ticker: filingRequest.ticker || '',
+      filingType: filingRequest.formType || filingRequest.filingType || '10-Q',
+      quarter: filingRequest.quarter || null,
+      year: filingRequest.year ?? null,
+      title: filingRequest.title || '',
+      kind: filingRequest.kind,
+      label: filingRequest.label,
+    };
+  }
+
+  if (legacyInputMode === 'url') {
+    return {
+      mode: 'url',
+      url: filingRequest.url || '',
+      title: filingRequest.title || '',
+      kind: filingRequest.kind,
+      label: filingRequest.label,
+    };
+  }
+
+  if (legacyInputMode === 'text') {
+    return {
+      mode: 'text',
+      text: filingRequest.text || '',
+      title: filingRequest.title || '',
+      kind: filingRequest.kind,
+      label: filingRequest.label,
+    };
+  }
+
+  return {
+    ...filingRequest,
+    kind: filingRequest.kind,
+    label: filingRequest.label,
+  };
 }
 
 export function buildSourcePacketForPrompt(source, maxChars = 12_000) {
@@ -72,6 +123,33 @@ function ingestPastedText(text, { kind, label, title }) {
   };
 }
 
+async function fetchSourceFromTicker(request, { kind, label }) {
+  const { ticker, filingType, quarter, year, title } = request || {};
+  const resolved = await fetchSecFiling({ ticker, formType: filingType, year, quarter });
+  const fetched = await fetchSourceFromUrl(resolved.filingUrl, {
+    kind,
+    label,
+    titleOverride: title || `${resolved.companyName || resolved.ticker} ${resolved.filing.form}`,
+  });
+
+  return {
+    ...fetched,
+    sourceType: 'ticker',
+    sourceUrl: resolved.filingUrl,
+    title: title || `${resolved.companyName || resolved.ticker} ${resolved.filing.form}`,
+    fallbackMetadata: {
+      ...fetched.fallbackMetadata,
+      company: fetched.fallbackMetadata.company || resolved.companyName,
+      filingType: fetched.fallbackMetadata.filingType || resolved.filing.form,
+      filingDate: fetched.fallbackMetadata.filingDate || resolved.filing.filingDate || null,
+      fiscalQuarter: fetched.fallbackMetadata.fiscalQuarter || resolved.filingQuarter || null,
+      fiscalYear: fetched.fallbackMetadata.fiscalYear || resolved.fiscalYear || null,
+      reportingPeriod: fetched.fallbackMetadata.reportingPeriod || buildReportingPeriodLabel(resolved.filingQuarter, resolved.fiscalYear),
+    },
+    secResolution: resolved,
+  };
+}
+
 async function fetchSourceFromUrl(url, { kind, label, titleOverride }) {
   if (!url || typeof url !== 'string') {
     throw new Error(`Paste a ${label.toLowerCase()} URL to continue.`);
@@ -85,10 +163,7 @@ async function fetchSourceFromUrl(url, { kind, label, titleOverride }) {
   }
 
   const response = await fetch(parsed.toString(), {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; FilingModelWorkbench/1.0; +https://localhost)',
-      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
-    },
+    headers: buildRequestHeaders(parsed),
   });
 
   if (!response.ok) {
@@ -217,6 +292,11 @@ export function inferMetadataFromText(text, title = '', kind = 'document') {
     period: periodMatch?.[1] || periodMatch?.[0] || null,
     filingType: normalizeFilingType(filingTypeMatch?.[1] || filingTypeMatch?.[0] || null),
     filingDate: kind === 'filing' ? dateMatch?.[0] || null : null,
+    fiscalQuarter: normalizeQuarterLabel(periodMatch?.[1] || periodMatch?.[0] || title || ''),
+    fiscalYear: extractMetadataYear(periodMatch?.[1] || title || text),
+    reportingPeriod: normalizeQuarterLabel(periodMatch?.[1] || periodMatch?.[0] || title || '')
+      ? buildReportingPeriodLabel(normalizeQuarterLabel(periodMatch?.[1] || periodMatch?.[0] || title || ''), extractMetadataYear(periodMatch?.[1] || title || text))
+      : null,
   };
 }
 
@@ -242,4 +322,48 @@ function normalizeFilingType(value) {
 
 function capitalize(value) {
   return String(value || 'document').charAt(0).toUpperCase() + String(value || 'document').slice(1);
+}
+
+function normalizeQuarterLabel(value) {
+  const upper = String(value || '').toUpperCase();
+  if (upper.includes('Q1') || upper.includes('FIRST QUARTER')) return 'Q1';
+  if (upper.includes('Q2') || upper.includes('SECOND QUARTER')) return 'Q2';
+  if (upper.includes('Q3') || upper.includes('THIRD QUARTER')) return 'Q3';
+  if (upper.includes('Q4') || upper.includes('FOURTH QUARTER')) return 'Q4';
+  return null;
+}
+
+function extractMetadataYear(value) {
+  const match = String(value || '').match(/(20\d{2})/);
+  return match ? Number(match[1]) : null;
+}
+
+function buildReportingPeriodLabel(fiscalQuarter, fiscalYear) {
+  if (!fiscalQuarter || !fiscalYear) return null;
+  return `${fiscalQuarter} ${fiscalYear}`;
+}
+
+function buildRequestHeaders(parsedUrl) {
+  if (isSecHost(parsedUrl.hostname)) {
+    return {
+      'User-Agent': buildSecUserAgent(),
+      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+  }
+
+  return {
+    Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
+    'User-Agent': 'FilingModelWorkbench/1.0',
+  };
+}
+
+function buildSecUserAgent() {
+  return process.env.SEC_USER_AGENT || 'Filing Model Workbench/1.0 (contact: research@localhost)';
+}
+
+function isSecHost(hostname = '') {
+  const normalized = String(hostname || '').toLowerCase();
+  return normalized === 'sec.gov' || normalized.endsWith('.sec.gov');
 }

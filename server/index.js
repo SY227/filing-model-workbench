@@ -11,7 +11,7 @@ import {
   normalizeScenarioAdjustments,
   YEAR_LABELS,
 } from './modeling.js';
-import { buildSourcePacketForPrompt, ingestSource, summarizeSource } from './sourceNormalization.js';
+import { buildSourcePacketForPrompt, ingestSource, normalizeFilingRequest, summarizeSource } from './sourceNormalization.js';
 import {
   buildFilingAnalysisPrompt,
   buildFilingExtractionPrompt,
@@ -49,10 +49,9 @@ app.get('/api/health', (_req, res) => {
 app.post('/api/review-filing', async (req, res) => {
   try {
     ensureApiKey();
-    const { filing } = req.body ?? {};
-    if (!filing) throw new Error('A 10-Q or 10-K input is required.');
+    const filingRequest = getFilingRequest(req.body);
 
-    const { filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta } = await extractFilingReview({ filing });
+    const { filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta } = await extractFilingReview({ filingRequest });
 
     res.json(
       buildReviewPacket({
@@ -93,12 +92,11 @@ app.post('/api/process', async (req, res) => {
   try {
     ensureApiKey();
 
-    const { filing } = req.body ?? {};
-    if (!filing) throw new Error('A 10-Q or 10-K input is required.');
+    const filingRequest = getFilingRequest(req.body);
 
     markStage('ingest', 'Ingesting filing', 'Fetching or normalizing the 10-Q or 10-K text.');
     const filingSource = await ingestSource(
-      { ...filing, kind: 'filing', label: 'Filing' },
+      { ...filingRequest, kind: 'filing', label: 'Filing' },
       { required: true, minChars: 700 }
     );
 
@@ -193,9 +191,15 @@ function ensureApiKey() {
   }
 }
 
-async function extractFilingReview({ filing }) {
+function getFilingRequest(body) {
+  const filingRequest = normalizeFilingRequest(body?.filingRequest || body?.filing);
+  if (!filingRequest) throw new Error('A filing request is required.');
+  return filingRequest;
+}
+
+async function extractFilingReview({ filingRequest }) {
   const filingSource = await ingestSource(
-    { ...filing, kind: 'filing', label: 'Filing' },
+    { ...filingRequest, kind: 'filing', label: 'Filing' },
     { required: true, minChars: 700 }
   );
 
@@ -228,7 +232,7 @@ async function extractFilingReview({ filing }) {
 function buildReviewPacket({ filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta }) {
   return {
     generatedAt: new Date().toISOString(),
-    filingMetadata: filingExtraction?.filingMetadata || filingSource.fallbackMetadata,
+    filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
     sources: { filing: summarizeSource(filingSource) },
     businessOverview: filingExtraction?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
@@ -338,7 +342,7 @@ function buildResult({ filingSource, filingExtraction, filingAnalysis, draftedBa
   return {
     generatedAt: new Date().toISOString(),
     model,
-    filingMetadata: filingExtraction?.filingMetadata || filingSource.fallbackMetadata,
+    filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
     sources: { filing: summarizeSource(filingSource) },
     draftedBaseline,
     draftedBaselineMeta,
@@ -387,6 +391,21 @@ function setupSseHeaders(res) {
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
+}
+
+function mergeFilingMetadata(extracted = {}, fallback = {}) {
+  return {
+    ...fallback,
+    ...extracted,
+    company: extracted?.company || fallback?.company || null,
+    filingType: extracted?.filingType || fallback?.filingType || null,
+    period: extracted?.period || fallback?.period || fallback?.reportingPeriod || null,
+    filingDate: extracted?.filingDate || fallback?.filingDate || null,
+    title: extracted?.title || fallback?.title || null,
+    fiscalQuarter: extracted?.fiscalQuarter || fallback?.fiscalQuarter || null,
+    fiscalYear: extracted?.fiscalYear || fallback?.fiscalYear || null,
+    reportingPeriod: extracted?.reportingPeriod || fallback?.reportingPeriod || null,
+  };
 }
 
 async function callGeminiJson(prompt, temperature = 0.2) {

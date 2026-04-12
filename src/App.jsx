@@ -13,9 +13,11 @@ const workflowTemplate = [
 const scenarioKeys = ['base', 'upside', 'downside'];
 const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
+const filingTypeOptions = ['10-Q', '10-K'];
+const quarterOptions = ['Q1', 'Q2', 'Q3'];
 
 function createEmptyFiling() {
-  return { inputMode: 'url', text: '', url: '', title: '' };
+  return { inputMode: 'ticker', ticker: '', formType: '10-Q', quarter: 'Q1', year: '', text: '', url: '', title: '' };
 }
 
 export default function App() {
@@ -44,7 +46,12 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [copyFeedback]);
 
-  const filingReady = filing.inputMode === 'url' ? Boolean(filing.url.trim()) : filing.text.trim().length >= 1000;
+  const yearError = validateYearInput(filing.year);
+  const filingReady = filing.inputMode === 'ticker'
+    ? Boolean(filing.ticker?.trim()) && !yearError && (filing.formType !== '10-Q' || Boolean(filing.quarter))
+    : filing.inputMode === 'url'
+      ? Boolean(filing.url.trim())
+      : filing.text.trim().length >= 1000;
   const activeMetadata = result?.filingMetadata || reviewPacket?.filingMetadata || null;
   const projectionLabels = useMemo(() => buildProjectionLabels(activeMetadata), [activeMetadata]);
   const selectedScenarioModel = result ? result.modelPack.scenarios[selectedScenario] : null;
@@ -74,7 +81,7 @@ export default function App() {
       const response = await fetch('/api/review-filing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filing }),
+        body: JSON.stringify({ filingRequest: buildFilingRequestPayload(filing) }),
       });
 
       const payload = await response.json();
@@ -97,7 +104,7 @@ export default function App() {
 
     try {
       await streamProcess(
-        { filing },
+        { filingRequest: buildFilingRequestPayload(filing) },
         {
           onStage: (payload) => {
             setLastCompletedStage(payload.label);
@@ -180,10 +187,10 @@ export default function App() {
       <main className="page">
         <section className="hero hero-premium card">
           <div className="hero-copy-block">
-            <div className="eyebrow">Instant model and valuation view from a 10-Q or 10-K</div>
+            <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
             <h1>Filing Model Workbench</h1>
             <p className="hero-copy">
-              Load a single public filing, let Gemini draft the normalized model inputs, and generate a premium filing-grounded model and valuation pack with deterministic scenario math.
+              Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
             </p>
           </div>
           <div className="hero-meta">
@@ -208,10 +215,12 @@ export default function App() {
 
               <DocumentInputCard
                 title="10-Q or 10-K"
-                subtitle="Use a public SEC filing URL or paste filing text directly. The model baseline and valuation frame are drafted internally from the filing."
+                subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing. Advanced manual input stays available if you want to override retrieval."
                 document={filing}
                 required
+                yearError={yearError}
                 onChange={updateFiling}
+                tickerPlaceholder="AAPL"
                 urlPlaceholder="https://www.sec.gov/Archives/.../company-filing.htm"
                 textPlaceholder="Paste the filing text here"
               />
@@ -233,12 +242,12 @@ export default function App() {
                   {isReviewing ? 'Reviewing filing…' : 'Review filing'}
                 </button>
                 <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
-                  {isProcessing ? 'Building model pack…' : 'Generate model pack'}
+                  {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
                 </button>
               </div>
 
               <div className="inline-guidance">
-                The filing is the only required input. Gemini drafts the baseline internally, then deterministic model and valuation math run from that drafted input set.
+                Enter ticker, keep the filing type and quarter precise, and let the system retrieve the matching SEC filing automatically. Year stays optional when you want to target a specific filing window.
               </div>
 
               {error ? <div className="error-banner">{error}</div> : null}
@@ -284,6 +293,7 @@ export default function App() {
                     <MetaPill label="Company" value={reviewPacket.filingMetadata.company || 'Needs review'} />
                     <MetaPill label="Filing type" value={reviewPacket.filingMetadata.filingType || 'Needs review'} />
                     <MetaPill label="Period" value={reviewPacket.filingMetadata.period || 'Needs review'} />
+                    {reviewPacket.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={reviewPacket.filingMetadata.fiscalQuarter} /> : null}
                     <MetaPill label="Filing date" value={reviewPacket.filingMetadata.filingDate || 'Needs review'} />
                   </div>
 
@@ -292,9 +302,9 @@ export default function App() {
               ) : (
                 <section className="card empty-state premium-panel empty-state-model-first">
                   <div className="section-kicker">Model-first output</div>
-                  <h2>Generate an instant model and valuation view from a filing</h2>
+                  <h2>Generate a model and valuation view from the latest SEC filing</h2>
                   <p>
-                    Load a 10-Q or 10-K to produce a premium model-first pack with scenario framing, valuation range, EV sensitivity, drafted assumptions, and filing-grounded analysis.
+                    Enter a ticker, choose 10-Q or 10-K, and add the quarter for 10-Q work so the system can retrieve the right SEC filing before building the model pack.
                   </p>
                   <div className="empty-grid model-first-grid">
                     <div className="empty-chip">Model headline summary</div>
@@ -313,6 +323,7 @@ export default function App() {
                     <MetaPill label="Company" value={result.filingMetadata.company || result.filingMetadata.title || 'Filing-grounded analysis'} />
                     <MetaPill label="Filing type" value={result.filingMetadata.filingType || 'Needs review'} />
                     <MetaPill label="Period" value={result.filingMetadata.period || 'Needs review'} />
+                    {result.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={result.filingMetadata.fiscalQuarter} /> : null}
                     <MetaPill label="Filing date" value={result.filingMetadata.filingDate || 'Needs review'} />
                     <MetaPill label="Source" value="Public filing" />
                   </div>
@@ -348,6 +359,14 @@ export default function App() {
                       <article key={scenarioKey} className={`scenario-summary-card scenario-hero-card ${scenarioKey}`}>
                         <div className="scenario-label">{capitalize(scenarioKey)} case</div>
                         <div className="scenario-summary-main">{formatPerShare(result.modelPack.scenarios[scenarioKey].valuation.valuePerShare)}</div>
+                        <div className="scenario-metric-grid">
+                          {buildScenarioHighlights(result.modelPack.scenarios[scenarioKey]).map((item) => (
+                            <div key={`${scenarioKey}-${item.label}`} className="scenario-metric-item">
+                              <span>{item.label}</span>
+                              <strong>{item.value}</strong>
+                            </div>
+                          ))}
+                        </div>
                         <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
                         <ul className="bullet-list compact-list inside-card">
                           {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
@@ -415,7 +434,7 @@ export default function App() {
                       <table className="sensitivity-table numeric-table elite-table sensitivity-matrix-table">
                         <thead>
                           <tr>
-                            <th>Terminal growth \ WACC</th>
+                            <th>Terminal growth \\ WACC</th>
                             {result.modelPack.baseSensitivity.waccValues.map((value) => <th key={value} className="numeric-cell">{formatPercent(value)}</th>)}
                           </tr>
                         </thead>
@@ -683,9 +702,11 @@ function DraftedBaselineTable({ draftedBaseline, draftedBaselineMeta, compact = 
   );
 }
 
-function DocumentInputCard({ title, subtitle, document, onChange, required = false, urlPlaceholder, textPlaceholder }) {
+function DocumentInputCard({ title, subtitle, document, onChange, required = false, yearError, tickerPlaceholder, urlPlaceholder, textPlaceholder }) {
+  const showQuarterSelector = document.formType === '10-Q';
+
   return (
-    <div className="document-card premium-panel-soft">
+    <div className="document-card premium-panel-soft intake-card-primary">
       <div className="document-card-head">
         <div>
           <div className="document-title-row">
@@ -696,16 +717,103 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
         </div>
       </div>
 
-      <div className="mini-switch">
-        <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">Load URL</button>
-        <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">Paste text</button>
+      <div className="primary-input-block">
+        <div className="primary-input-copy">
+          <div className="section-subtitle emphasis-subtitle">Primary retrieval</div>
+          <div className="primary-input-title">Enter ticker</div>
+          <div className="mini-note">Enter ticker, keep filing type on one clean row, choose the quarter for 10-Q retrieval, and optionally add a year. Leave year blank to retrieve the latest matching filing.</div>
+        </div>
+
+        <div className={`primary-controls-grid ${showQuarterSelector ? 'has-quarter' : 'without-quarter'}`}>
+          <div className="control-group">
+            <label className="control-label">Ticker</label>
+            <input
+              className="text-input ticker-input"
+              type="text"
+              placeholder={tickerPlaceholder}
+              value={document.ticker || ''}
+              onChange={(event) => onChange({ ...document, inputMode: 'ticker', ticker: event.target.value.toUpperCase() })}
+            />
+          </div>
+
+          <div className="control-group">
+            <label className="control-label">Filing type</label>
+            <div className="mini-switch filing-type-switch">
+              {filingTypeOptions.map((option) => (
+                <button
+                  key={option}
+                  className={document.formType === option ? 'mode-button active' : 'mode-button'}
+                  onClick={() => onChange({
+                    ...document,
+                    inputMode: 'ticker',
+                    formType: option,
+                    quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
+                  })}
+                  type="button"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {showQuarterSelector ? (
+            <div className="control-group">
+              <label className="control-label">Quarter</label>
+              <div className="mini-switch filing-quarter-switch">
+                {quarterOptions.map((option) => (
+                  <button
+                    key={option}
+                    className={document.quarter === option ? 'mode-button active' : 'mode-button'}
+                    onClick={() => onChange({ ...document, inputMode: 'ticker', quarter: option })}
+                    type="button"
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+              <div className="field-help">Quarter-aware retrieval is only used for 10-Q filings.</div>
+            </div>
+          ) : null}
+
+          <div className="control-group">
+            <label className="control-label">Year (optional)</label>
+            <input
+              className={`text-input year-input ${yearError ? 'input-error' : ''}`}
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              placeholder="2025"
+              value={document.year || ''}
+              onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
+            />
+            <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
+          </div>
+        </div>
       </div>
 
-      {document.inputMode === 'url' ? (
-        <input className="text-input" type="url" placeholder={urlPlaceholder} value={document.url || ''} onChange={(event) => onChange({ ...document, url: event.target.value })} />
-      ) : (
-        <textarea className="document-textarea" placeholder={textPlaceholder} value={document.text || ''} onChange={(event) => onChange({ ...document, text: event.target.value })} />
-      )}
+      <details className="advanced-inputs-card">
+        <summary>
+          <div>
+            <div className="section-subtitle">Advanced input</div>
+            <div className="advanced-input-title">Manual filing URL or pasted text</div>
+          </div>
+          <span className="summary-hint">Open</span>
+        </summary>
+
+        <div className="mini-note advanced-note">Use this only when you want to override ticker-based SEC retrieval.</div>
+
+        <div className="mini-switch advanced-switch">
+          <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">Filing URL</button>
+          <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">Paste filing text</button>
+        </div>
+
+        {document.inputMode === 'text' ? (
+          <textarea className="document-textarea" placeholder={textPlaceholder} value={document.text || ''} onChange={(event) => onChange({ ...document, inputMode: 'text', text: event.target.value })} />
+        ) : (
+          <input className="text-input" type="url" placeholder={urlPlaceholder} value={document.url || ''} onChange={(event) => onChange({ ...document, inputMode: 'url', url: event.target.value })} />
+        )}
+      </details>
     </div>
   );
 }
@@ -884,6 +992,16 @@ function forecastMetricRows(scenarioModel) {
   return rows.map((row) => ({ label: row.label, values: (scenarioModel?.forecastTable || []).map((item) => (row.format === 'percent' ? formatPercent(item[row.key]) : formatMoney(item[row.key]))) }));
 }
 
+function buildScenarioHighlights(scenarioModel) {
+  const finalYear = scenarioModel?.forecastTable?.at(-1) || null;
+  return [
+    { label: 'Enterprise value', value: formatMoney(scenarioModel?.valuation?.enterpriseValue) },
+    { label: 'FY+1 rev growth', value: formatPercent(scenarioModel?.forecastTable?.[0]?.revenueGrowth) },
+    { label: 'FY+5 op margin', value: formatPercent(finalYear?.operatingMargin) },
+    { label: 'FY+5 FCF', value: formatMoney(finalYear?.freeCashFlow) },
+  ];
+}
+
 function buildProjectionLabels(metadata, count = horizonLabels.length) {
   const year = extractAnchorYear(metadata);
   if (!year) return horizonLabels;
@@ -894,6 +1012,39 @@ function extractAnchorYear(metadata) {
   const text = `${metadata?.period || ''} ${metadata?.filingDate || ''}`;
   const matches = [...text.matchAll(/(20\d{2})/g)].map((match) => Number(match[1]));
   return matches.at(-1) || null;
+}
+
+function validateYearInput(year) {
+  const value = String(year || '').trim();
+  if (!value) return '';
+  if (!/^\d{4}$/.test(value)) return 'Enter a 4-digit year, like 2025, or leave it blank for latest.';
+  const numeric = Number(value);
+  if (numeric < 1994 || numeric > 2100) return 'Enter a valid 4-digit filing year, or leave it blank for latest.';
+  return '';
+}
+
+function buildFilingRequestPayload(filing) {
+  if (filing.inputMode === 'ticker') {
+    return {
+      mode: 'ticker_lookup',
+      ticker: filing.ticker?.trim() || '',
+      filingType: filing.formType || '10-Q',
+      quarter: filing.formType === '10-Q' ? filing.quarter || 'Q1' : null,
+      year: filing.year?.trim() ? Number(filing.year) : null,
+    };
+  }
+
+  if (filing.inputMode === 'url') {
+    return {
+      mode: 'url',
+      url: filing.url?.trim() || '',
+    };
+  }
+
+  return {
+    mode: 'text',
+    text: filing.text || '',
+  };
 }
 
 function buildCopyPayload(kind, result, projectionHeaders) {
