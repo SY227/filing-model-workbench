@@ -15,7 +15,7 @@ export async function ingestSource(source, options = {}) {
 
   const normalizedSource =
     inputMode === 'url'
-      ? await fetchSourceFromUrl(source.url, { kind, label })
+      ? await fetchSourceFromUrl(source.url, { kind, label, titleOverride: source.title })
       : ingestPastedText(source.text, { kind, label, title: source.title });
 
   if (required && (!normalizedSource.cleanedText || normalizedSource.cleanedText.length < minChars)) {
@@ -23,16 +23,6 @@ export async function ingestSource(source, options = {}) {
   }
 
   return normalizedSource;
-}
-
-export async function ingestSupportingSources(sources = []) {
-  const results = [];
-  for (const source of sources) {
-    if (!hasSourceContent(source)) continue;
-    const ingested = await ingestSource(source, { required: false });
-    if (ingested?.cleanedText) results.push(ingested);
-  }
-  return results;
 }
 
 export function buildSourcePacketForPrompt(source, maxChars = 12_000) {
@@ -48,16 +38,6 @@ export function buildSourcePacketForPrompt(source, maxChars = 12_000) {
   };
 }
 
-export function buildSupportingPacketForPrompt(sources = [], maxChars = 4_500) {
-  return sources.map((source) => ({
-    kind: source.kind,
-    label: source.label,
-    title: source.title,
-    url: source.sourceUrl,
-    excerpt: clampText(source.cleanedText, maxChars),
-  }));
-}
-
 export function summarizeSource(source) {
   if (!source) return null;
   return {
@@ -70,10 +50,6 @@ export function summarizeSource(source) {
     preview: clampText(source.cleanedText, MAX_TEXT_PREVIEW),
     fullText: source.cleanedText,
   };
-}
-
-function hasSourceContent(source) {
-  return Boolean(source && (String(source.url || '').trim() || String(source.text || '').trim()));
 }
 
 function ingestPastedText(text, { kind, label, title }) {
@@ -96,7 +72,7 @@ function ingestPastedText(text, { kind, label, title }) {
   };
 }
 
-async function fetchSourceFromUrl(url, { kind, label }) {
+async function fetchSourceFromUrl(url, { kind, label, titleOverride }) {
   if (!url || typeof url !== 'string') {
     throw new Error(`Paste a ${label.toLowerCase()} URL to continue.`);
   }
@@ -122,13 +98,13 @@ async function fetchSourceFromUrl(url, { kind, label }) {
   const contentType = response.headers.get('content-type') || '';
   const raw = await response.text();
 
-  let title = parsed.hostname;
+  let title = titleOverride || parsed.hostname;
   let extractedText = raw;
 
   if (contentType.includes('html')) {
     const extraction = extractTextFromHtml(raw);
     extractedText = extraction.cleanedText;
-    title = extraction.extractedTitle || title;
+    title = titleOverride || extraction.extractedTitle || title;
   }
 
   const cleanedText = normalizeDocumentText(extractedText);
@@ -172,7 +148,7 @@ function extractTextFromHtml(html) {
     if (rows.length) $(table).replaceWith(`\n${rows.join('\n')}\n`);
   });
 
-  const candidateSelectors = ['article', 'main', '[role="main"]', '.transcript', '#transcript', '.article-body', '.main-content', '.content', 'body'];
+  const candidateSelectors = ['article', 'main', '[role="main"]', '.article-body', '.main-content', '.content', 'body'];
   const candidates = candidateSelectors
     .map((selector) => {
       const node = $(selector).first();
@@ -219,18 +195,27 @@ export function normalizeDocumentText(text) {
 }
 
 export function inferMetadataFromText(text, title = '', kind = 'document') {
-  const firstChunk = `${title}\n${String(text || '').slice(0, 5000)}`;
-  const filingTypeMatch = firstChunk.match(/\b(10-Q|10-K|8-K|annual report|quarterly report)\b/i);
-  const quarterMatch = firstChunk.match(/\b(Q[1-4]|first quarter|second quarter|third quarter|fourth quarter|fiscal year|year ended)\s*(20\d{2})?\b/i);
+  const firstChunk = `${title}\n${String(text || '').slice(0, 8000)}`;
+  const filingTypeMatch =
+    firstChunk.match(/\bFORM\s+(10-Q|10-K|8-K)\b/i) ||
+    firstChunk.match(/\b(10-Q|10-K|8-K|annual report|quarterly report)\b/i);
+  const periodMatch =
+    firstChunk.match(/for the quarterly period ended\s+([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i) ||
+    firstChunk.match(/for the fiscal year ended\s+([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i) ||
+    firstChunk.match(/year ended\s+([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i) ||
+    firstChunk.match(/\b(Q[1-4]|first quarter|second quarter|third quarter|fourth quarter|fiscal year)\s*(20\d{2})?\b/i);
   const dateMatch = firstChunk.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},\s+20\d{2}\b/i);
-  const companyMatch = title.match(/^(.+?)(?:\s+(?:Q[1-4]|10-Q|10-K|Annual Report|Quarterly Report|Earnings|Transcript|Conference Call))/i);
+  const titleCompanyMatch = title.match(/^(.+?)(?:\s+(?:Q[1-4]|10-Q|10-K|Annual Report|Quarterly Report|Form 10-Q|Form 10-K))/i);
+  const lineCompanyMatch = String(text || '')
+    .split('\n')
+    .slice(0, 12)
+    .find((line) => /inc\.|corporation|corp\.|company|holdings|ltd\.|plc|group/i.test(line) && line.length < 120);
 
   return {
     title: title || deriveTitleFromText(text, kind),
-    company: companyMatch?.[1]?.trim() || null,
-    period: quarterMatch?.[0] || null,
-    filingType: normalizeFilingType(filingTypeMatch?.[0] || null),
-    callDate: kind === 'transcript' ? dateMatch?.[0] || null : null,
+    company: titleCompanyMatch?.[1]?.trim() || lineCompanyMatch?.trim() || null,
+    period: periodMatch?.[1] || periodMatch?.[0] || null,
+    filingType: normalizeFilingType(filingTypeMatch?.[1] || filingTypeMatch?.[0] || null),
     filingDate: kind === 'filing' ? dateMatch?.[0] || null : null,
   };
 }

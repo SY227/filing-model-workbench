@@ -3,7 +3,7 @@ export const YEAR_LABELS = Array.from({ length: HORIZON }, (_, index) => `FY+${i
 
 export const DEFAULT_BASELINE = {
   companyName: '',
-  unitLabel: 'USDm',
+  unitLabel: '$mm',
   currentRevenue: 1000,
   revenueGrowth: [8, 7, 6, 5, 4],
   grossMarginStart: 55,

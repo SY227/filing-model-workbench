@@ -1,19 +1,19 @@
 const BANKER_STYLE = `Style requirements:
-- write like a seasoned sell-side analyst or investment banking associate
-- concise, sober, analytical, and precise
-- do not use hype, startup language, or inflated certainty
-- separate reported facts, stated management commentary, inferred implications, and analyst-review items
-- if evidence is weak, say so and keep numerical revisions at zero or modest`;
+- write like a highly experienced investment banking VP or senior sell-side analyst
+- concise, sober, analytical, and client-ready
+- avoid hype, startup phrasing, or generic AI-summary language
+- distinguish clearly between reported facts, inferred implications, and items that still require analyst judgment
+- do not fabricate missing figures, precision, consensus data, or management intent
+- if evidence is thin, say so and keep scenario adjustments measured`;
 
-export function buildFilingExtractionPrompt({ filing, supportingMaterials, baseline }) {
-  return `You are extracting a filing-grounded base for an external analyst model update.
+export function buildFilingExtractionPrompt({ filing, baseline }) {
+  return `You are extracting a filing-grounded analysis base from a single public-company filing.
 
 ${BANKER_STYLE}
 
-The latest filing is the factual anchor. Optional supporting materials can add context, but they do not override the filing.
-
+The filing is the only primary source for this task.
 Return strict JSON only. Do not wrap in markdown.
-Do not fabricate reported figures. If a figure is not clearly supported, return null.
+Do not invent numbers. Use null when a value is not directly supportable.
 
 Required JSON shape:
 {
@@ -23,6 +23,26 @@ Required JSON shape:
     "period": string | null,
     "filingDate": string | null,
     "title": string | null
+  },
+  "businessOverview": {
+    "summary": string,
+    "businessLines": string[],
+    "segmentNotes": [
+      {
+        "segment": string,
+        "summary": string,
+        "evidence": string,
+        "confidence": "high" | "medium" | "low"
+      }
+    ],
+    "geographyNotes": [
+      {
+        "region": string,
+        "summary": string,
+        "evidence": string,
+        "confidence": "high" | "medium" | "low"
+      }
+    ]
   },
   "reportedBase": {
     "summary": string,
@@ -45,34 +65,33 @@ Required JSON shape:
         "evidence": string,
         "confidence": "high" | "medium" | "low"
       }
-    ],
-    "segmentNotes": [
-      {
-        "segment": string,
-        "summary": string,
-        "evidence": string,
-        "confidence": "high" | "medium" | "low"
-      }
-    ],
-    "liquidityAndBalanceSheet": string[],
-    "riskFactors": string[]
+    ]
   },
-  "filingTakeaways": [
+  "keyTakeaways": [
     {
       "title": string,
       "summary": string,
-      "category": "revenue" | "demand" | "pricing" | "volume" | "gross_margin" | "operating_margin" | "opex" | "capex" | "working_capital" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "guidance" | "valuation",
-      "evidence": string,
+      "category": "business_model" | "revenue" | "margin" | "capex" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "guidance" | "other",
       "classification": "reported" | "inferred",
+      "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
   ],
-  "evidenceMap": [
+  "modelDrivers": [
     {
-      "driver": "revenue" | "demand" | "pricing" | "volume" | "gross_margin" | "operating_margin" | "opex" | "capex" | "working_capital" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "guidance" | "valuation",
-      "source": "filing",
+      "driver": "revenue" | "gross_margin" | "operating_margin" | "capex" | "working_capital" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "valuation",
+      "takeaway": string,
+      "modelImplication": string,
       "classification": "reported" | "inferred" | "review_required",
-      "summary": string,
+      "evidence": string,
+      "confidence": "high" | "medium" | "low"
+    }
+  ],
+  "risksAndWatchItems": [
+    {
+      "item": string,
+      "type": "risk" | "watch_item",
+      "whyItMatters": string,
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
@@ -89,118 +108,35 @@ User baseline assumptions:
 ${JSON.stringify(baseline, null, 2)}
 
 Filing packet:
-${JSON.stringify(filing, null, 2)}
-
-Supporting material packets:
-${JSON.stringify(supportingMaterials, null, 2)}`;
+${JSON.stringify(filing, null, 2)}`;
 }
 
-export function buildTranscriptDeltaPrompt({ filingExtraction, transcript, supportingMaterials }) {
-  return `You are comparing management commentary against a filing-grounded base.
+export function buildFilingAnalysisPrompt({ filingExtraction, baseline }) {
+  return `You are producing filing-grounded model framing from a single 10-Q or 10-K.
 
 ${BANKER_STYLE}
 
-Use the filing extraction as the base frame. The transcript is the change-detection and forward-signal layer.
+Your job is to translate the filing into disciplined external-analyst work product.
+Preserve a measured tone. Do not overstate what the filing alone can prove.
+Scenario adjustments should be suitable for a deterministic model layer.
 
 Return strict JSON only. Do not wrap in markdown.
-Do not restate the filing unless it matters for what changed or what management emphasized.
 
 Required JSON shape:
 {
-  "transcriptMetadata": {
-    "title": string | null,
-    "callDate": string | null,
-    "managementTone": {
-      "label": "constructive" | "mixed" | "cautious" | "negative" | "neutral",
-      "rationale": string
-    }
-  },
-  "callTakeaways": [
-    {
-      "title": string,
-      "summary": string,
-      "category": "guidance" | "demand" | "pricing" | "volume" | "gross_margin" | "operating_margin" | "opex" | "capex" | "working_capital" | "cash_flow" | "segment" | "risk" | "valuation",
-      "evidence": string,
-      "classification": "stated" | "inferred" | "review_required",
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "transcriptDelta": {
-    "overview": string,
-    "changes": [
-      {
-        "driver": "revenue" | "demand" | "pricing" | "volume" | "gross_margin" | "operating_margin" | "opex" | "capex" | "working_capital" | "cash_flow" | "segment" | "risk" | "guidance" | "valuation",
-        "direction": "up" | "down" | "mixed" | "neutral",
-        "summary": string,
-        "evidence": string,
-        "classification": "stated" | "inferred" | "review_required",
-        "confidence": "high" | "medium" | "low"
-      }
-    ]
-  },
-  "watchItems": [
-    {
-      "item": string,
-      "whyItMatters": string,
-      "confidence": "high" | "medium" | "low"
-    }
-  ]
-}
-
-Filing extraction JSON:
-${JSON.stringify(filingExtraction, null, 2)}
-
-Transcript packet:
-${JSON.stringify(transcript, null, 2)}
-
-Supporting material packets:
-${JSON.stringify(supportingMaterials, null, 2)}`;
-}
-
-export function buildIntegratedUpdatePrompt({ filingExtraction, transcriptDelta, supportingMaterials, baseline }) {
-  return `You are producing a banker-grade model update recommendation pack for an external analyst.
-
-${BANKER_STYLE}
-
-Your job is to merge the filing-grounded base, optional transcript delta, optional supporting materials, and the user's prior baseline view.
-
-Rules:
-- return strict JSON only
-- do not wrap in markdown
-- do not fabricate reported values, consensus figures, or false precision
-- preserve zero / no-change adjustments when evidence is weak
-- scenario adjustments are meant for deterministic math, not narrative flourish
-- language should read like experienced banker / sell-side work product
-
-Required JSON shape:
-{
-  "changeVsPriorView": {
+  "whatMattersForModel": {
     "summary": string,
     "bullets": string[]
   },
-  "filingGroundedBase": {
-    "summary": string,
-    "assumptionChecks": [
-      {
-        "field": string,
-        "currentBaseline": string,
-        "filingReadThrough": string,
-        "status": "reported" | "inferred" | "review_required" | "missing",
-        "evidence": string,
-        "confidence": "high" | "medium" | "low"
-      }
-    ]
-  },
-  "estimateChangeLog": [
+  "assumptionReview": [
     {
-      "driver": string,
-      "priorView": string,
-      "recommendedChange": string,
-      "classification": "reported" | "stated" | "inferred" | "review_required",
-      "rationale": string,
+      "field": string,
+      "currentBaseline": string,
+      "filingReadThrough": string,
+      "modelImplication": string,
+      "status": "reported" | "inferred" | "review_required" | "missing",
       "evidence": string,
-      "confidence": "high" | "medium" | "low",
-      "reviewRequired": true | false
+      "confidence": "high" | "medium" | "low"
     }
   ],
   "scenarioAdjustments": {
@@ -244,13 +180,20 @@ Required JSON shape:
       "keyAssumptions": string[]
     }
   },
-  "valuationImplications": {
+  "valuationFraming": {
     "summary": string,
     "bridgeDrivers": [
       {
         "driver": string,
         "effect": "positive" | "negative" | "mixed" | "neutral",
         "explanation": string,
+        "confidence": "high" | "medium" | "low"
+      }
+    ],
+    "keySensitivities": [
+      {
+        "factor": string,
+        "implication": string,
         "confidence": "high" | "medium" | "low"
       }
     ]
@@ -260,13 +203,6 @@ Required JSON shape:
       "item": string,
       "reason": string,
       "evidence": string,
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
-  "watchItems": [
-    {
-      "item": string,
-      "whyItMatters": string,
       "confidence": "high" | "medium" | "low"
     }
   ],
@@ -283,38 +219,25 @@ User baseline assumptions:
 ${JSON.stringify(baseline, null, 2)}
 
 Filing extraction JSON:
-${JSON.stringify(filingExtraction, null, 2)}
-
-Transcript delta JSON:
-${JSON.stringify(transcriptDelta, null, 2)}
-
-Supporting material packets:
-${JSON.stringify(supportingMaterials, null, 2)}`;
+${JSON.stringify(filingExtraction, null, 2)}`;
 }
 
-export function buildReportFormattingPrompt({ filingExtraction, transcriptDelta, integratedUpdate, modelSummary }) {
-  return `You are formatting a concise banker-grade model update pack.
+export function buildReportFormattingPrompt({ filingExtraction, filingAnalysis, modelSummary }) {
+  return `You are formatting a filing-grounded analysis pack for a client-ready finance workflow.
 
 ${BANKER_STYLE}
 
-Return strict JSON only. Do not wrap in markdown. Keep the output sharp and concise.
+The output should read like polished banker or senior-analyst work product.
+Return strict JSON only. Do not wrap in markdown.
+Keep it sharp and measured.
 
 Required JSON shape:
 {
-  "executiveTakeaway": {
+  "executiveSummary": {
     "headline": string,
     "body": string,
     "bullets": string[]
   },
-  "keyTakeaways": [
-    {
-      "title": string,
-      "summary": string,
-      "source": "filing" | "transcript" | "supporting_material",
-      "classification": "reported" | "stated" | "inferred" | "review_required",
-      "confidence": "high" | "medium" | "low"
-    }
-  ],
   "scenarioWriteups": {
     "base": {
       "summary": string,
@@ -331,19 +254,15 @@ Required JSON shape:
   },
   "valuationSummary": {
     "summary": string,
-    "bridgeCommentary": string
-  },
-  "whatWouldChangeMyView": string[]
+    "bullets": string[]
+  }
 }
 
 Filing extraction JSON:
 ${JSON.stringify(filingExtraction, null, 2)}
 
-Transcript delta JSON:
-${JSON.stringify(transcriptDelta, null, 2)}
-
-Integrated update JSON:
-${JSON.stringify(integratedUpdate, null, 2)}
+Filing analysis JSON:
+${JSON.stringify(filingAnalysis, null, 2)}
 
 Deterministic model summary:
 ${JSON.stringify(modelSummary, null, 2)}`;
