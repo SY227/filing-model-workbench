@@ -5,13 +5,14 @@ import { sampleCases } from './samples';
 const workflowTemplate = [
   { key: 'ingest', label: 'Ingesting filing', note: 'Fetch or normalize the 10-Q or 10-K text.', status: 'pending' },
   { key: 'extract', label: 'Extracting filing facts', note: 'Identify filing metadata, reported base metrics, and disclosure-driven takeaways.', status: 'pending' },
-  { key: 'frame', label: 'Framing model implications', note: 'Translate the filing into estimate framing, scenario setup, and valuation context.', status: 'pending' },
+  { key: 'frame', label: 'Drafting assumptions and model implications', note: 'Translate the filing into proposed assumptions, scenario setup, and valuation context.', status: 'pending' },
   { key: 'forecast', label: 'Running deterministic model math', note: 'Roll the setup through code-driven forecast and DCF logic.', status: 'pending' },
   { key: 'pack', label: 'Preparing analysis pack', note: 'Assemble the final client-ready sections, tables, and exports.', status: 'pending' },
 ];
 
 const scenarioKeys = ['base', 'upside', 'downside'];
 const confidenceOrder = { high: 3, medium: 2, low: 1 };
+const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
 
 function createEmptyFiling() {
   return {
@@ -269,7 +270,7 @@ export default function App() {
               </div>
 
               <div className="inline-guidance assumption-guidance">
-                These fields are your working baseline. If the filing review surfaces explicit values, the tool backfills them conservatively, but analyst judgment still governs the forward frame.
+                These fields are your reviewable override layer. The filing review backfills explicit reported items where possible, then the AI proposes assumption framing, and deterministic math runs only after that review step.
               </div>
 
               {baselineGroups.map((group) => (
@@ -350,7 +351,7 @@ export default function App() {
                   <div className="section-kicker">Step 2</div>
                   <h2>Review extracted filing information</h2>
                   <p className="review-copy">
-                    This preview isolates the filing metadata, reported base, and the disclosure set that will drive the model framing.
+                    This preview isolates the filing metadata, reported base, derived read-through, and the disclosure set that will drive the drafted assumption layer.
                   </p>
 
                   <div className="report-header-grid review-meta-grid">
@@ -375,11 +376,38 @@ export default function App() {
                     ))}
                   </div>
 
+                  {(reviewPacket.derivedMetrics || []).length ? (
+                    <div className="table-wrap compact-spacing">
+                      <table className="delta-table numeric-table">
+                        <thead>
+                          <tr>
+                            <th>Derived metric</th>
+                            <th>Value</th>
+                            <th>Logic</th>
+                            <th>Evidence</th>
+                            <th>Confidence</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {reviewPacket.derivedMetrics.map((item, index) => (
+                            <tr key={`${item.metric}-${index}`}>
+                              <td className="strong-cell">{item.metric}</td>
+                              <td>{item.value}</td>
+                              <td>{item.logic}</td>
+                              <td>{item.evidence}</td>
+                              <td><ConfidencePill confidence={item.confidence} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+
                   <div className="review-columns two-column-grid">
                     <div className="split-panel">
                       <div className="split-header">Key filing takeaways</div>
                       <div className="stack-list">
-                        {sortByConfidence(reviewPacket.keyTakeaways).slice(0, 6).map((item, index) => (
+                        {sortByClassificationAndConfidence(reviewPacket.keyTakeaways).slice(0, 6).map((item, index) => (
                           <div key={`${item.title}-${index}`} className="stack-item">
                             <div className="stack-text">{item.title}</div>
                             <div className="stack-support">{item.summary}</div>
@@ -485,7 +513,7 @@ export default function App() {
 
                 <SectionCard title="Key filing takeaways" kicker="3" defaultOpen>
                   <div className="takeaway-grid">
-                    {sortByConfidence(result.keyTakeaways).map((item, index) => (
+                    {sortByClassificationAndConfidence(result.keyTakeaways).map((item, index) => (
                       <article key={`${item.title}-${index}`} className="takeaway-card">
                         <div className="takeaway-top">
                           <SourcePill source="filing" />
@@ -511,7 +539,7 @@ export default function App() {
                   </ul>
 
                   <div className="takeaway-grid compact-spacing">
-                    {sortByConfidence(result.whatMattersForModel?.drivers || []).map((item, index) => (
+                    {sortByClassificationAndConfidence(result.whatMattersForModel?.drivers || []).map((item, index) => (
                       <article key={`${item.driver}-${index}`} className="evidence-card">
                         <div className="takeaway-top">
                           <span className="category-pill">{prettyCategory(item.driver)}</span>
@@ -528,7 +556,7 @@ export default function App() {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Reported base and key assumptions" kicker="5" defaultOpen>
+                <SectionCard title="Reported base and proposed assumptions" kicker="5" defaultOpen>
                   <p className="executive-body">{result.reportedBase?.summary}</p>
 
                   <div className="facts-grid">
@@ -540,6 +568,35 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+
+                  {(result.proposedAssumptions || []).length ? (
+                    <div className="table-wrap compact-spacing">
+                      <table className="delta-table assumption-table numeric-table">
+                        <thead>
+                          <tr>
+                            <th>Field</th>
+                            <th>Proposed assumption</th>
+                            <th>Rationale</th>
+                            <th>Evidence</th>
+                            <th>Review</th>
+                            <th>Confidence</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {result.proposedAssumptions.map((row, index) => (
+                            <tr key={`${row.field}-${index}`}>
+                              <td className="strong-cell">{row.field}</td>
+                              <td>{row.proposal}</td>
+                              <td>{row.rationale}</td>
+                              <td>{row.evidence}</td>
+                              <td><ClassificationPill classification={row.reviewRequired ? 'review_required' : 'proposed'} /></td>
+                              <td><ConfidencePill confidence={row.confidence} /></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
 
                   <div className="table-wrap compact-spacing">
                     <table className="delta-table assumption-table numeric-table">
@@ -642,6 +699,17 @@ export default function App() {
                       <li key={bullet}>{bullet}</li>
                     ))}
                   </ul>
+
+                  {(result.valuationSummary?.scenarioStructure || []).length ? (
+                    <div className="missing-inputs-card compact-spacing">
+                      <div className="section-subtitle">Scenario structure</div>
+                      <ul className="bullet-list compact-list">
+                        {result.valuationSummary.scenarioStructure.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
 
                   <div className="valuation-grid three-up compact-spacing">
                     <ValuationCard title="Base case" valuation={result.modelPack.scenarios.base.valuation} tone="base" />
@@ -752,6 +820,19 @@ export default function App() {
                 </SectionCard>
 
                 <SectionCard title="Source appendix" kicker="12">
+                  {result.sourceAppendix?.methodology ? (
+                    <div className="missing-inputs-card compact-spacing">
+                      <div className="section-subtitle">Methodology</div>
+                      <p className="executive-body">{result.sourceAppendix.methodology}</p>
+                      {(result.sourceAppendix.caveats || []).length ? (
+                        <ul className="bullet-list compact-list">
+                          {result.sourceAppendix.caveats.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <SourceAppendixCard title="Filing" source={result.sources.filing} />
                 </SectionCard>
               </>
@@ -893,7 +974,7 @@ function SourcePill({ source }) {
   return <span className={`source-pill ${source}`}>{label}</span>;
 }
 
-function ClassificationPill({ classification = 'inferred' }) {
+function ClassificationPill({ classification = 'derived' }) {
   return <span className={`classification-pill ${classification}`}>{classificationLabel(classification)}</span>;
 }
 
@@ -968,6 +1049,15 @@ function sortByConfidence(items) {
   return [...(items || [])].sort((a, b) => (confidenceOrder[b.confidence] || 0) - (confidenceOrder[a.confidence] || 0));
 }
 
+function sortByClassificationAndConfidence(items) {
+  return [...(items || [])].sort((a, b) => {
+    const aClass = classificationOrder[a.classification] ?? classificationOrder[a.status] ?? 0;
+    const bClass = classificationOrder[b.classification] ?? classificationOrder[b.status] ?? 0;
+    if (bClass !== aClass) return bClass - aClass;
+    return (confidenceOrder[b.confidence] || 0) - (confidenceOrder[a.confidence] || 0);
+  });
+}
+
 function formatPercent(value) {
   if (!Number.isFinite(Number(value))) return '—';
   return `${Number(value).toFixed(1)}%`;
@@ -997,6 +1087,7 @@ function prettyCategory(value = 'other') {
 
 function classificationLabel(value) {
   if (value === 'review_required') return 'review required';
+  if (value === 'proposed') return 'proposed';
   return value.replace(/_/g, ' ');
 }
 

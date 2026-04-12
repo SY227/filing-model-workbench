@@ -248,9 +248,15 @@ button {
 }
 
 .classification-pill.inferred,
+.classification-pill.derived,
 .classification-pill.missing {
   background: rgba(93, 103, 122, 0.12);
   color: var(--inferred);
+}
+
+.classification-pill.proposed {
+  background: rgba(34, 50, 74, 0.1);
+  color: var(--accent);
 }
 
 .classification-pill.review_required {

@@ -2,7 +2,7 @@ const BANKER_STYLE = `Style requirements:
 - write like a highly experienced investment banking VP or senior sell-side analyst
 - concise, sober, analytical, and client-ready
 - avoid hype, startup phrasing, or generic AI-summary language
-- distinguish clearly between reported facts, inferred implications, and items that still require analyst judgment
+- distinguish clearly between reported facts, derived implications, proposed assumptions, and items that still require analyst judgment
 - do not fabricate missing figures, precision, consensus data, or management intent
 - if evidence is thin, say so and keep scenario adjustments measured`;
 
@@ -22,7 +22,10 @@ Required JSON shape:
     "filingType": "10-Q" | "10-K" | "8-K" | "other" | null,
     "period": string | null,
     "filingDate": string | null,
-    "title": string | null
+    "title": string | null,
+    "fiscalQuarter": string | null,
+    "fiscalYear": string | null,
+    "reportingPeriod": string | null
   },
   "businessOverview": {
     "summary": string,
@@ -52,10 +55,12 @@ Required JSON shape:
       "operatingMarginPct": number | null,
       "taxRatePct": number | null,
       "capexPctRevenue": number | null,
+      "daPctRevenue": number | null,
       "shareCount": number | null,
       "cash": number | null,
       "debt": number | null,
-      "netDebt": number | null
+      "netDebt": number | null,
+      "liquidity": number | null
     },
     "reportedFacts": [
       {
@@ -67,12 +72,21 @@ Required JSON shape:
       }
     ]
   },
+  "derivedMetrics": [
+    {
+      "metric": string,
+      "value": string,
+      "logic": string,
+      "evidence": string,
+      "confidence": "high" | "medium" | "low"
+    }
+  ],
   "keyTakeaways": [
     {
       "title": string,
       "summary": string,
       "category": "business_model" | "revenue" | "margin" | "capex" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "guidance" | "other",
-      "classification": "reported" | "inferred",
+      "classification": "reported" | "derived",
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
@@ -82,7 +96,7 @@ Required JSON shape:
       "driver": "revenue" | "gross_margin" | "operating_margin" | "capex" | "working_capital" | "cash_flow" | "balance_sheet" | "segment" | "risk" | "valuation",
       "takeaway": string,
       "modelImplication": string,
-      "classification": "reported" | "inferred" | "review_required",
+      "classification": "reported" | "derived" | "review_required",
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
@@ -92,6 +106,24 @@ Required JSON shape:
       "item": string,
       "type": "risk" | "watch_item",
       "whyItMatters": string,
+      "evidence": string,
+      "confidence": "high" | "medium" | "low"
+    }
+  ],
+  "guidanceReferences": [
+    {
+      "item": string,
+      "summary": string,
+      "evidence": string,
+      "confidence": "high" | "medium" | "low"
+    }
+  ],
+  "confidenceMap": object,
+  "evidenceMap": object,
+  "reviewFlags": [
+    {
+      "item": string,
+      "reason": string,
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
@@ -128,13 +160,24 @@ Required JSON shape:
     "summary": string,
     "bullets": string[]
   },
+  "proposedAssumptions": [
+    {
+      "field": string,
+      "proposal": string,
+      "rationale": string,
+      "classification": "proposed",
+      "evidence": string,
+      "confidence": "high" | "medium" | "low",
+      "reviewRequired": boolean
+    }
+  ],
   "assumptionReview": [
     {
       "field": string,
       "currentBaseline": string,
       "filingReadThrough": string,
       "modelImplication": string,
-      "status": "reported" | "inferred" | "review_required" | "missing",
+      "status": "reported" | "derived" | "proposed" | "review_required" | "missing",
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }
@@ -182,6 +225,7 @@ Required JSON shape:
   },
   "valuationFraming": {
     "summary": string,
+    "scenarioStructure": string[],
     "bridgeDrivers": [
       {
         "driver": string,
@@ -198,6 +242,8 @@ Required JSON shape:
       }
     ]
   },
+  "confidenceMap": object,
+  "evidenceMap": object,
   "reviewFlags": [
     {
       "item": string,
@@ -255,6 +301,10 @@ Required JSON shape:
   "valuationSummary": {
     "summary": string,
     "bullets": string[]
+  },
+  "sourceAppendix": {
+    "methodology": string,
+    "caveats": string[]
   }
 }
 

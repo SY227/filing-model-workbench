@@ -17,6 +17,12 @@ import {
   buildFilingExtractionPrompt,
   buildReportFormattingPrompt,
 } from './promptSchemas.js';
+import {
+  applySchemaDefaults,
+  FILING_ANALYSIS_SCHEMA,
+  FILING_EXTRACTION_SCHEMA,
+  REPORT_PACK_SCHEMA,
+} from './schemas.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,23 +111,29 @@ app.post('/api/process', async (req, res) => {
     );
 
     markStage('extract', 'Extracting filing facts', 'Identifying filing metadata, reported base metrics, and disclosure-driven takeaways.');
-    const filingExtraction = await callGeminiJson(
-      buildFilingExtractionPrompt({
-        filing: buildSourcePacketForPrompt(filingSource, 24_000),
-        baseline: analystBaseline,
-      }),
-      0.1
+    const filingExtraction = applySchemaDefaults(
+      await callGeminiJson(
+        buildFilingExtractionPrompt({
+          filing: buildSourcePacketForPrompt(filingSource, 24_000),
+          baseline: analystBaseline,
+        }),
+        0.1
+      ),
+      FILING_EXTRACTION_SCHEMA
     );
 
     const baselineUsed = mergeBaselineWithReportedBase(analystBaseline, filingExtraction);
 
-    markStage('frame', 'Framing model implications', 'Converting filing disclosures into estimate framing, scenario setup, and valuation implications.');
-    const filingAnalysis = await callGeminiJson(
-      buildFilingAnalysisPrompt({
-        filingExtraction,
-        baseline: baselineUsed,
-      }),
-      0.18
+    markStage('frame', 'Drafting assumptions and model implications', 'Converting filing disclosures into a reported base, proposed assumptions, scenario setup, and valuation framing.');
+    const filingAnalysis = applySchemaDefaults(
+      await callGeminiJson(
+        buildFilingAnalysisPrompt({
+          filingExtraction,
+          baseline: baselineUsed,
+        }),
+        0.18
+      ),
+      FILING_ANALYSIS_SCHEMA
     );
 
     markStage('forecast', 'Running deterministic model math', 'Rolling the filing-grounded setup through code-driven forecast and valuation logic.');
@@ -135,13 +147,16 @@ app.post('/api/process', async (req, res) => {
     });
 
     markStage('pack', 'Preparing analysis pack', 'Formatting the final report shell, scenario commentary, and valuation summary.');
-    const reportPack = await callGeminiJson(
-      buildReportFormattingPrompt({
-        filingExtraction,
-        filingAnalysis,
-        modelSummary: buildModelSummaryForPrompt(modelPack),
-      }),
-      0.2
+    const reportPack = applySchemaDefaults(
+      await callGeminiJson(
+        buildReportFormattingPrompt({
+          filingExtraction,
+          filingAnalysis,
+          modelSummary: buildModelSummaryForPrompt(modelPack),
+        }),
+        0.2
+      ),
+      REPORT_PACK_SCHEMA
     );
 
     stageTimings[stageTimings.length - 1].durationMs = Date.now() - currentStageStart;
@@ -198,12 +213,15 @@ async function extractFilingReview({ filing, baseline }) {
     { required: true, minChars: 700 }
   );
 
-  const filingExtraction = await callGeminiJson(
-    buildFilingExtractionPrompt({
-      filing: buildSourcePacketForPrompt(filingSource, 24_000),
-      baseline,
-    }),
-    0.1
+  const filingExtraction = applySchemaDefaults(
+    await callGeminiJson(
+      buildFilingExtractionPrompt({
+        filing: buildSourcePacketForPrompt(filingSource, 24_000),
+        baseline,
+      }),
+      0.1
+    ),
+    FILING_EXTRACTION_SCHEMA
   );
 
   return {
@@ -222,9 +240,14 @@ function buildReviewPacket({ filingSource, filingExtraction, baselineInput, base
     },
     businessOverview: filingExtraction?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
+    derivedMetrics: filingExtraction?.derivedMetrics || [],
     keyTakeaways: filingExtraction?.keyTakeaways || [],
     modelDrivers: filingExtraction?.modelDrivers || [],
+    guidanceReferences: filingExtraction?.guidanceReferences || [],
     risksAndWatchItems: filingExtraction?.risksAndWatchItems || [],
+    reviewFlags: filingExtraction?.reviewFlags || [],
+    confidenceMap: filingExtraction?.confidenceMap || {},
+    evidenceMap: filingExtraction?.evidenceMap || {},
     missingBaseInputs: filingExtraction?.missingBaseInputs || [],
     baselineInput,
     baselineSuggested,
@@ -255,6 +278,7 @@ function mergeBaselineWithReportedBase(baseline, filingExtraction) {
     merged.operatingMarginStart = metrics.operatingMarginPct;
   }
   if (merged.capexPct === DEFAULT_BASELINE.capexPct && Number.isFinite(metrics.capexPctRevenue)) merged.capexPct = metrics.capexPctRevenue;
+  if (merged.daPct === DEFAULT_BASELINE.daPct && Number.isFinite(metrics.daPctRevenue)) merged.daPct = metrics.daPctRevenue;
 
   if (merged.grossMarginEnd === DEFAULT_BASELINE.grossMarginEnd && merged.grossMarginStart > merged.grossMarginEnd) {
     merged.grossMarginEnd = merged.grossMarginStart;
@@ -343,6 +367,8 @@ function buildResult({
       drivers: filingExtraction?.modelDrivers || [],
     },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
+    derivedMetrics: filingExtraction?.derivedMetrics || [],
+    proposedAssumptions: filingAnalysis?.proposedAssumptions || [],
     assumptionReview: filingAnalysis?.assumptionReview || [],
     scenarioWriteups: reportPack?.scenarioWriteups || {},
     modelPack,
@@ -350,11 +376,22 @@ function buildResult({
       summary: reportPack?.valuationSummary?.summary || filingAnalysis?.valuationFraming?.summary || '',
       bullets: reportPack?.valuationSummary?.bullets || [],
       bridgeDrivers: filingAnalysis?.valuationFraming?.bridgeDrivers || [],
+      scenarioStructure: filingAnalysis?.valuationFraming?.scenarioStructure || [],
     },
     keySensitivities: filingAnalysis?.valuationFraming?.keySensitivities || [],
+    guidanceReferences: filingExtraction?.guidanceReferences || [],
     risksAndWatchItems: filingExtraction?.risksAndWatchItems || [],
-    reviewFlags: filingAnalysis?.reviewFlags || [],
+    reviewFlags: [...(filingExtraction?.reviewFlags || []), ...(filingAnalysis?.reviewFlags || [])],
     checklist: filingAnalysis?.checklist || [],
+    confidenceMap: {
+      extraction: filingExtraction?.confidenceMap || {},
+      analysis: filingAnalysis?.confidenceMap || {},
+    },
+    evidenceMap: {
+      extraction: filingExtraction?.evidenceMap || {},
+      analysis: filingAnalysis?.evidenceMap || {},
+    },
+    sourceAppendix: reportPack?.sourceAppendix || { methodology: '', caveats: [] },
     missingBaseInputs: filingExtraction?.missingBaseInputs || [],
     stageTimings,
   };
