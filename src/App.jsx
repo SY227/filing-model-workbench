@@ -14,7 +14,7 @@ const scenarioKeys = ['base', 'upside', 'downside'];
 const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
 const filingTypeOptions = ['10-Q', '10-K'];
-const quarterOptions = ['Q1', 'Q2', 'Q3'];
+const quarterOptions = ['Q1', 'Q2', 'Q3', 'Q4'];
 
 function createEmptyFiling() {
   return { inputMode: 'ticker', ticker: '', formType: '10-Q', quarter: 'Q1', year: '', text: '', url: '', title: '' };

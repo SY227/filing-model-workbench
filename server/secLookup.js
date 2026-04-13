@@ -19,7 +19,11 @@ export async function resolveTickerToFiling({ ticker, formType, year, quarter })
   }
 
   if (quarter !== undefined && quarter !== null && quarter !== '' && normalizedQuarter === null) {
-    throw new Error('Quarter must be Q1, Q2, or Q3 when selecting a 10-Q.');
+    throw new Error('Quarter must be Q1, Q2, Q3, or Q4.');
+  }
+
+  if (normalizedFormType === '10-Q' && normalizedQuarter === 'Q4') {
+    throw new Error('Q4 is generally reported on the annual 10-K rather than a 10-Q. Switch filing type to 10-K for Q4 retrieval.');
   }
 
   const cik = await getCikForTicker(normalizedTicker);
@@ -208,7 +212,7 @@ function normalizeQuarter(quarter, formType) {
   if (normalizeFormType(formType) !== '10-Q') return null;
   if (quarter === undefined || quarter === null || quarter === '') return null;
   const normalized = String(quarter).trim().toUpperCase();
-  return ['Q1', 'Q2', 'Q3'].includes(normalized) ? normalized : null;
+  return ['Q1', 'Q2', 'Q3', 'Q4'].includes(normalized) ? normalized : null;
 }
 
 function normalizeYear(year) {

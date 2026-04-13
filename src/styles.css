@@ -408,6 +408,7 @@ button {
 .control-group {
   display: grid;
   gap: 8px;
+  align-content: start;
 }
 
 .control-label {
@@ -456,11 +457,14 @@ button {
   margin: 0;
   width: 100%;
   flex-wrap: nowrap;
+  min-height: 50px;
+  align-items: stretch;
 }
 
 .filing-type-switch .mode-button,
 .filing-quarter-switch .mode-button {
   flex: 1 1 0;
+  min-height: 40px;
 }
 
 .advanced-inputs-card {
@@ -593,6 +597,7 @@ button {
   color: var(--text);
   border-radius: 14px;
   padding: 12px 14px;
+  min-height: 50px;
   outline: none;
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
