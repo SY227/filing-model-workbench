@@ -340,7 +340,7 @@ function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, fi
     reviewFlags: dedupeByKey([
       ...(deterministicExtraction?.reviewFlags || []),
       ...(filingExtractionAi?.reviewFlags || []),
-    ], (item) => `${item.item}|${item.reason}|${item.evidence}`),
+    ], normalizeReviewFlagKey),
     missingBaseInputs: dedupeByKey([
       ...(deterministicExtraction?.missingBaseInputs || []),
       ...(filingExtractionAi?.missingBaseInputs || []),
@@ -375,7 +375,7 @@ function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filin
   const grossMarginStart = chooseDeterministic(metrics.grossMarginPct);
   const operatingMarginStart = chooseDeterministic(metrics.operatingMarginPct);
   const taxRate = chooseDeterministic(metrics.taxRatePct);
-  const capexPct = chooseDeterministic(metrics.capexPctRevenue);
+  const capexPct = chooseDeterministic(metrics.capexPctRevenue) ?? deriveConservativeCapexFallback({ metrics, currentRevenue, grossMarginStart, operatingMarginStart, daPctRevenue: metrics.daPctRevenue });
   const daPct = chooseDeterministic(metrics.daPctRevenue);
   const revenueGrowthProfile = buildRevenueGrowthProfile({
     aiValues: aiDraft.revenueGrowth,
@@ -813,25 +813,30 @@ function buildCompanyAwareSoftAssumptions({ filingMetadata, metrics, historicalM
   if (Number.isFinite(leverageRatio) && leverageRatio > 0.8) terminalGrowth -= 0.2;
   terminalGrowth = clampNumber(round1(terminalGrowth), DEFAULT_BASELINE.terminalGrowth, 1.8, Math.min(4.0, wacc - 1.25));
 
+  const eliteMarginProfile = grossMarginStart >= 68 || operatingMarginStart >= 28;
+
   let grossMarginEnd = Number.isFinite(grossMarginStart) ? grossMarginStart : DEFAULT_BASELINE.grossMarginEnd;
-  if (grossMarginStart >= 65) grossMarginEnd += 0.6;
+  if (grossMarginStart >= 75) grossMarginEnd += 0.8;
+  else if (grossMarginStart >= 65) grossMarginEnd += 0.6;
   else if (grossMarginStart >= 50) grossMarginEnd += 0.4;
   else if (grossMarginStart <= 25 && anchorGrowth > 5) grossMarginEnd += 0.3;
   if (operatingMarginStart < 0 && grossMarginStart > 35) grossMarginEnd += 0.6;
   if (anchorGrowth < 0) grossMarginEnd -= 0.4;
   if (currentRevenue >= 50_000 && grossMarginStart >= 35) grossMarginEnd += 0.2;
-  grossMarginEnd = clampNumber(round1(grossMarginEnd), DEFAULT_BASELINE.grossMarginEnd, Math.max(-20, (grossMarginStart || DEFAULT_BASELINE.grossMarginStart) - 2.5), Math.min(95, (grossMarginStart || DEFAULT_BASELINE.grossMarginStart) + 3.5));
+  grossMarginEnd = clampNumber(round1(grossMarginEnd), DEFAULT_BASELINE.grossMarginEnd, Math.max(-20, (grossMarginStart || DEFAULT_BASELINE.grossMarginStart) - 2.5), Math.min(eliteMarginProfile ? 97 : 95, (grossMarginStart || DEFAULT_BASELINE.grossMarginStart) + (eliteMarginProfile ? 4.5 : 3.5)));
 
   let operatingMarginEnd = Number.isFinite(operatingMarginStart) ? operatingMarginStart : DEFAULT_BASELINE.operatingMarginEnd;
-  if (operatingMarginStart >= 25) operatingMarginEnd += 0.8 + (anchorGrowth > 8 ? 0.4 : 0);
+  if (operatingMarginStart >= 30) operatingMarginEnd += 1.0 + (anchorGrowth > 8 ? 0.5 : 0.2);
+  else if (operatingMarginStart >= 25) operatingMarginEnd += 0.8 + (anchorGrowth > 8 ? 0.4 : 0);
   else if (operatingMarginStart >= 15) operatingMarginEnd += 1.2 + (currentRevenue >= 50_000 ? 0.4 : 0);
   else if (operatingMarginStart >= 5) operatingMarginEnd += 2.0 + (grossMarginStart > 45 ? 0.6 : 0);
   else if (operatingMarginStart >= 0) operatingMarginEnd += 3.0 + (grossMarginStart > 45 ? 0.8 : 0);
   else operatingMarginEnd += 4.5 + (grossMarginStart > 45 ? 1.0 : 0);
+  if (eliteMarginProfile && anchorGrowth >= 5) operatingMarginEnd += 0.4;
   if (anchorGrowth < 0) operatingMarginEnd -= 0.6;
   if (capexPct > 6) operatingMarginEnd -= 0.3;
-  operatingMarginEnd = Math.min(operatingMarginEnd, grossMarginEnd - 2.5);
-  operatingMarginEnd = clampNumber(round1(operatingMarginEnd), DEFAULT_BASELINE.operatingMarginEnd, -20, Math.min(50, grossMarginEnd - 2));
+  operatingMarginEnd = Math.min(operatingMarginEnd, grossMarginEnd - (eliteMarginProfile ? 1.5 : 2.5));
+  operatingMarginEnd = clampNumber(round1(operatingMarginEnd), DEFAULT_BASELINE.operatingMarginEnd, -20, Math.min(eliteMarginProfile ? 60 : 50, grossMarginEnd - 1.2));
 
   let workingCapitalProfile = 'balanced';
   if (Number.isFinite(operatingWorkingCapitalPct)) {
@@ -962,6 +967,23 @@ function dedupeByKey(items, keyFn) {
     seen.add(key);
     return true;
   });
+}
+
+function normalizeReviewFlagKey(item = {}) {
+  return [item.item, item.reason, item.evidence]
+    .map((value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .join('|');
+}
+
+function deriveConservativeCapexFallback({ metrics, currentRevenue, grossMarginStart, operatingMarginStart, daPctRevenue }) {
+  const daPct = firstFiniteNumber(metrics?.daPctRevenue, daPctRevenue);
+  const revenueScale = firstFiniteNumber(currentRevenue, metrics?.revenueLtm);
+  let fallback = Number.isFinite(daPct) ? Math.max(daPct, daPct + 0.4) : 2.5;
+  if (Number.isFinite(grossMarginStart) && grossMarginStart >= 60) fallback -= 0.3;
+  if (Number.isFinite(operatingMarginStart) && operatingMarginStart >= 25) fallback -= 0.2;
+  if (Number.isFinite(revenueScale) && revenueScale >= 100000) fallback -= 0.2;
+  if (Number.isFinite(metrics?.inventoryPctRevenue) && metrics.inventoryPctRevenue > 8) fallback += 0.8;
+  return clampNumber(round1(fallback), DEFAULT_BASELINE.capexPct, 1.2, 6.5);
 }
 
 function formatMoneyMillions(value) {

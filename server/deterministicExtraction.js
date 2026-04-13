@@ -32,6 +32,8 @@ const MONEY_CONCEPTS = {
     ['us-gaap', 'PaymentsToAcquirePropertyPlantAndEquipment'],
     ['us-gaap', 'CapitalExpendituresIncurredButNotYetPaid'],
     ['us-gaap', 'PaymentsToAcquireProductiveAssets'],
+    ['us-gaap', 'PropertyPlantAndEquipmentAdditions'],
+    ['us-gaap', 'CapitalExpendituresGross'],
   ],
   da: [
     ['us-gaap', 'DepreciationDepletionAndAmortization'],
@@ -123,7 +125,7 @@ const TABLE_ROW_PATTERNS = {
   inventory: [/^inventories$/i, /^inventory$/i],
   accountsPayable: [/^accounts payable$/i, /^trade accounts payable$/i],
   deferredRevenue: [/^deferred revenue$/i, /^contract liabilities$/i, /^contract liability, current$/i],
-  capex: [/^purchases of property, plant and equipment$/i, /^capital expenditures$/i, /^payments to acquire property, plant and equipment$/i],
+  capex: [/^purchases of property, plant and equipment$/i, /^purchases of property and equipment$/i, /^capital expenditures$/i, /^capital spending$/i, /^additions to property, plant and equipment$/i, /^property and equipment additions$/i, /^payments to acquire property, plant and equipment$/i, /^acquisitions of property, plant and equipment$/i],
   da: [/^depreciation and amortization$/i, /^depreciation, depletion and amortization$/i, /^depreciation$/i],
   dilutedShares: [/^diluted shares$/i, /^weighted average diluted shares$/i, /^weighted average shares diluted$/i],
 };
@@ -1368,11 +1370,17 @@ function dedupeDerivedMetrics(items) {
 function dedupeFlags(items) {
   const seen = new Set();
   return items.filter((item) => {
-    const key = `${item.item}|${item.reason}|${item.evidence}`;
+    const key = normalizeFlagKey(item);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+}
+
+function normalizeFlagKey(item = {}) {
+  return [item.item, item.reason, item.evidence]
+    .map((value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .join('|');
 }
 
 function dedupeMissingInputs(items) {
@@ -1406,11 +1414,18 @@ export function evaluateBaselineReadiness({ draftedBaseline, draftedBaselineMeta
     daPct: draftedBaseline?.daPct,
   };
 
+  const marginsDeterministicallySupported = ['grossMarginStart', 'operatingMarginStart'].every((field) => {
+    const source = hardFieldSources[field];
+    return source && source.source !== 'ai_fallback' && source.confidence !== 'low';
+  });
+  const capexMissing = !Number.isFinite(hardFieldValues.capexPct);
+  const ancillaryRateFailures = ['taxRate', 'daPct'].filter((field) => !Number.isFinite(hardFieldValues[field]));
   const lowConfidenceFallbacks = HARD_FIELD_ORDER.filter((field) => {
     const source = hardFieldSources[field];
-    if (!source) return true;
+    if (!source) return field !== 'capexPct';
     return source.source === 'ai_fallback' || source.confidence === 'low';
   });
+  const structuralFallbacks = lowConfidenceFallbacks.filter((field) => !['capexPct'].includes(field));
 
   pushCheck(checks, 'Revenue base resolved', Number.isFinite(hardFieldValues.currentRevenue), Number.isFinite(hardFieldValues.currentRevenue)
     ? `Revenue base ${formatMillions(hardFieldValues.currentRevenue)}.`
@@ -1442,22 +1457,41 @@ export function evaluateBaselineReadiness({ draftedBaseline, draftedBaselineMeta
       ? 'Net debt agrees with deterministic cash and debt balances.'
       : `Net debt ${formatMillions(hardFieldValues.netDebt)} conflicts with expected ${formatMillions(expectedNetDebt)}.`);
 
-  pushCheck(checks, 'Gross and operating margins are plausible', Number.isFinite(hardFieldValues.grossMarginStart)
+  const marginLogicIsCoherent = Number.isFinite(hardFieldValues.grossMarginStart)
     && Number.isFinite(hardFieldValues.operatingMarginStart)
     && hardFieldValues.grossMarginStart >= -10
-    && hardFieldValues.grossMarginStart <= 95
+    && hardFieldValues.grossMarginStart <= 98
     && hardFieldValues.operatingMarginStart >= -40
-    && hardFieldValues.operatingMarginStart <= 60
-    && hardFieldValues.operatingMarginStart <= hardFieldValues.grossMarginStart + 5,
-    `Gross margin ${round1(hardFieldValues.grossMarginStart)}%, operating margin ${round1(hardFieldValues.operatingMarginStart)}%.`);
+    && hardFieldValues.operatingMarginStart <= Math.min(70, hardFieldValues.grossMarginStart + 3);
+  const marginMessage = `Gross margin ${round1(hardFieldValues.grossMarginStart)}%, operating margin ${round1(hardFieldValues.operatingMarginStart)}%.`;
+  pushCheck(
+    checks,
+    'Gross and operating margins are internally coherent',
+    marginLogicIsCoherent && (marginsDeterministicallySupported || hardFieldValues.grossMarginStart <= 92),
+    marginsDeterministicallySupported
+      ? `${marginMessage} Filing-supported margins cleared the coherence check.`
+      : marginMessage
+  );
 
-  pushCheck(checks, 'Tax, capex, and D&A rates resolved', ['taxRate', 'capexPct', 'daPct'].every((field) => Number.isFinite(hardFieldValues[field])),
+  const taxDaResolved = ancillaryRateFailures.length === 0;
+  pushCheck(checks, 'Tax and D&A rates resolved', taxDaResolved,
+    `Tax ${round1(hardFieldValues.taxRate)}%, D&A ${round1(hardFieldValues.daPct)}%.`);
+
+  const capexHandlingPassed = !capexMissing || (taxDaResolved && Number.isFinite(hardFieldValues.currentRevenue) && Number.isFinite(hardFieldValues.grossMarginStart) && Number.isFinite(hardFieldValues.operatingMarginStart));
+  pushCheck(checks, 'Capex handling is sufficient for valuation', capexHandlingPassed,
+    capexMissing
+      ? 'Capex was not deterministically resolved, but the remaining baseline is strong enough to allow a conservative fallback.'
+      : `Capex ${round1(hardFieldValues.capexPct)}%.`);
+
+  const impossibleRateMix = Number.isFinite(hardFieldValues.capexPct) && Number.isFinite(hardFieldValues.daPct)
+    && (hardFieldValues.capexPct > 30 || hardFieldValues.daPct > 20 || hardFieldValues.capexPct + hardFieldValues.daPct > 40);
+  pushCheck(checks, 'Ancillary rate mix is credible', !impossibleRateMix,
     `Tax ${round1(hardFieldValues.taxRate)}%, capex ${round1(hardFieldValues.capexPct)}%, D&A ${round1(hardFieldValues.daPct)}%.`);
 
-  pushCheck(checks, 'Too many hard fields are not deterministic', lowConfidenceFallbacks.length <= 2,
-    lowConfidenceFallbacks.length
-      ? `Low-confidence or AI-owned hard fields: ${lowConfidenceFallbacks.join(', ')}.`
-      : 'All hard fields are deterministic or high-confidence derived.');
+  pushCheck(checks, 'Too many structural hard fields are not deterministic', structuralFallbacks.length <= 2,
+    structuralFallbacks.length
+      ? `Low-confidence or AI-owned structural hard fields: ${structuralFallbacks.join(', ')}.`
+      : 'Structural hard fields are deterministic or high-confidence derived.');
 
   const blockingChecks = checks.filter((check) => !check.passed);
   const unresolvedFields = HARD_FIELD_ORDER.filter((field) => !Number.isFinite(hardFieldValues[field]) && field !== 'cash' && field !== 'debt');
