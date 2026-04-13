@@ -15,6 +15,13 @@ const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
 const filingTypeOptions = ['10-Q', '10-K'];
 const quarterOptions = ['Q1', 'Q2', 'Q3', 'Q4'];
+const workflowStepDurationHintsMs = {
+  ingest: 7000,
+  extract: 18000,
+  frame: 16000,
+  forecast: 7000,
+  pack: 14000,
+};
 
 function createEmptyFiling() {
   return { inputMode: 'ticker', ticker: '', formType: '10-Q', quarter: 'Q1', year: '', text: '', url: '', title: '' };
@@ -33,6 +40,9 @@ export default function App() {
   const [selectedScenario, setSelectedScenario] = useState('base');
   const [copyFeedback, setCopyFeedback] = useState('');
   const [runningDotCount, setRunningDotCount] = useState(1);
+  const [activeWorkflowStepKey, setActiveWorkflowStepKey] = useState('');
+  const [activeWorkflowStepStartedAt, setActiveWorkflowStepStartedAt] = useState(0);
+  const [activeWorkflowStepProgress, setActiveWorkflowStepProgress] = useState(0);
 
   useEffect(() => {
     fetch('/api/health')
@@ -60,6 +70,24 @@ export default function App() {
     return () => clearInterval(timer);
   }, [isProcessing]);
 
+  useEffect(() => {
+    if (!isProcessing || !activeWorkflowStepKey || !activeWorkflowStepStartedAt) {
+      if (!isProcessing) setActiveWorkflowStepProgress(0);
+      return undefined;
+    }
+
+    const durationHint = workflowStepDurationHintsMs[activeWorkflowStepKey] || 12000;
+    const updateStepProgress = () => {
+      const elapsed = Date.now() - activeWorkflowStepStartedAt;
+      const progress = Math.max(6, Math.min(95, Math.round((elapsed / durationHint) * 100)));
+      setActiveWorkflowStepProgress(progress);
+    };
+
+    updateStepProgress();
+    const timer = setInterval(updateStepProgress, 400);
+    return () => clearInterval(timer);
+  }, [activeWorkflowStepKey, activeWorkflowStepStartedAt, isProcessing]);
+
   const yearError = validateYearInput(filing.year);
   const filingReady = filing.inputMode === 'ticker'
     ? Boolean(filing.ticker?.trim()) && !yearError && (filing.formType !== '10-Q' || Boolean(filing.quarter))
@@ -70,14 +98,6 @@ export default function App() {
   const projectionLabels = useMemo(() => buildProjectionLabels(activeMetadata), [activeMetadata]);
   const selectedScenarioModel = result ? result.modelPack.scenarios[selectedScenario] : null;
   const runningDots = '.'.repeat(runningDotCount);
-  const workflowProgress = useMemo(() => {
-    if (result) return 100;
-    const completeCount = workflow.filter((step) => step.status === 'complete').length;
-    const activeCount = workflow.filter((step) => step.status === 'active').length;
-    if (!isProcessing && !completeCount) return 0;
-    if (!isProcessing) return Math.round((completeCount / workflow.length) * 100);
-    return Math.max(8, Math.min(95, Math.round(((completeCount + activeCount * 0.5) / workflow.length) * 100)));
-  }, [isProcessing, result, workflow]);
 
   const heroMetrics = useMemo(() => {
     if (!result) return [];
@@ -123,6 +143,9 @@ export default function App() {
     setResult(null);
     setLastCompletedStage('');
     setWorkflow(workflowTemplate.map((step, index) => ({ ...step, status: index === 0 ? 'active' : 'pending' })));
+    setActiveWorkflowStepKey(workflowTemplate[0].key);
+    setActiveWorkflowStepStartedAt(Date.now());
+    setActiveWorkflowStepProgress(6);
     setIsProcessing(true);
 
     try {
@@ -131,6 +154,9 @@ export default function App() {
         {
           onStage: (payload) => {
             setLastCompletedStage(payload.label);
+            setActiveWorkflowStepKey(payload.key);
+            setActiveWorkflowStepStartedAt(Date.now());
+            setActiveWorkflowStepProgress(6);
             setWorkflow((current) => {
               const activeIndex = current.findIndex((step) => step.key === payload.key);
               return current.map((step, index) => {
@@ -143,10 +169,12 @@ export default function App() {
           onResult: (payload) => {
             setResult(payload);
             setSelectedScenario('base');
+            setActiveWorkflowStepProgress(100);
             setWorkflow((current) => current.map((step) => ({ ...step, status: 'complete' })));
           },
           onError: (payload) => {
             setError(payload.message || 'Processing failed.');
+            setActiveWorkflowStepProgress(0);
             setWorkflow((current) => current.map((step) => ({ ...step, status: step.status === 'active' ? 'pending' : step.status })));
           },
         }
@@ -173,6 +201,9 @@ export default function App() {
     setWorkflow(workflowTemplate);
     setLastCompletedStage('');
     setSelectedScenario('base');
+    setActiveWorkflowStepKey('');
+    setActiveWorkflowStepStartedAt(0);
+    setActiveWorkflowStepProgress(0);
   }
 
   function loadSample(sample) {
@@ -279,14 +310,14 @@ export default function App() {
                   </div>
                     <div className="workflow-status-stack">
                       <div className="workflow-status">{renderStatusLabel(step.status, runningDots)}</div>
-                      {step.status === 'active' ? <div className="workflow-progress">{workflowProgress}%</div> : null}
+                      {step.status === 'active' ? <div className="workflow-progress">{activeWorkflowStepProgress}%</div> : null}
                     </div>
                   </div>
                 ))}
               </div>
               <div className="workflow-footer">
               {isProcessing
-                ? `Current step: ${lastCompletedStage || `Starting${runningDots}`} • ${workflowProgress}% complete`
+                ? `Current step: ${lastCompletedStage || `Starting${runningDots}`} • ${activeWorkflowStepProgress}% of step`
                 : result
                   ? 'Model pack complete'
                   : 'Awaiting filing input'}
