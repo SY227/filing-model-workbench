@@ -373,18 +373,36 @@ button {
   background: linear-gradient(180deg, rgba(62, 114, 184, 0.05), rgba(255, 255, 255, 0.9));
 }
 
-.primary-controls-grid {
+.primary-controls-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.primary-controls-row {
   display: grid;
   gap: 14px;
   align-items: start;
 }
 
-.primary-controls-grid.has-quarter {
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 0.95fr) minmax(150px, 0.7fr);
+.primary-controls-row-top {
+  grid-template-columns: minmax(0, 1.4fr) minmax(240px, 0.95fr);
 }
 
-.primary-controls-grid.without-quarter {
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(150px, 0.8fr);
+.primary-controls-row-bottom.with-quarter {
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr);
+}
+
+.primary-controls-row-bottom.without-quarter {
+  grid-template-columns: minmax(180px, 0.72fr);
+  justify-content: start;
+}
+
+.year-control-group {
+  max-width: 240px;
+}
+
+.primary-controls-row-bottom.with-quarter .year-control-group {
+  max-width: none;
 }
 
 .control-group {
@@ -1042,9 +1060,13 @@ button {
     align-items: stretch;
   }
 
-  .primary-controls-grid.has-quarter,
-  .primary-controls-grid.without-quarter {
+  .primary-controls-row-top,
+  .primary-controls-row-bottom.with-quarter {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .primary-controls-row-bottom.without-quarter {
+    grid-template-columns: minmax(180px, 0.72fr);
   }
 }
 
@@ -1077,8 +1099,9 @@ button {
   .hero-metrics-grid,
   .report-context-strip,
   .scenario-metric-grid,
-  .primary-controls-grid.has-quarter,
-  .primary-controls-grid.without-quarter {
+  .primary-controls-row-top,
+  .primary-controls-row-bottom.with-quarter,
+  .primary-controls-row-bottom.without-quarter {
     grid-template-columns: 1fr;
   }
 

@@ -724,70 +724,74 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
           <div className="mini-note">Enter ticker, keep filing type on one clean row, choose the quarter for 10-Q retrieval, and optionally add a year. Leave year blank to retrieve the latest matching filing.</div>
         </div>
 
-        <div className={`primary-controls-grid ${showQuarterSelector ? 'has-quarter' : 'without-quarter'}`}>
-          <div className="control-group">
-            <label className="control-label">Ticker</label>
-            <input
-              className="text-input ticker-input"
-              type="text"
-              placeholder={tickerPlaceholder}
-              value={document.ticker || ''}
-              onChange={(event) => onChange({ ...document, inputMode: 'ticker', ticker: event.target.value.toUpperCase() })}
-            />
-          </div>
-
-          <div className="control-group">
-            <label className="control-label">Filing type</label>
-            <div className="mini-switch filing-type-switch">
-              {filingTypeOptions.map((option) => (
-                <button
-                  key={option}
-                  className={document.formType === option ? 'mode-button active' : 'mode-button'}
-                  onClick={() => onChange({
-                    ...document,
-                    inputMode: 'ticker',
-                    formType: option,
-                    quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
-                  })}
-                  type="button"
-                >
-                  {option}
-                </button>
-              ))}
+        <div className="primary-controls-stack">
+          <div className="primary-controls-row primary-controls-row-top">
+            <div className="control-group ticker-control-group">
+              <label className="control-label">Ticker</label>
+              <input
+                className="text-input ticker-input"
+                type="text"
+                placeholder={tickerPlaceholder}
+                value={document.ticker || ''}
+                onChange={(event) => onChange({ ...document, inputMode: 'ticker', ticker: event.target.value.toUpperCase() })}
+              />
             </div>
-          </div>
 
-          {showQuarterSelector ? (
-            <div className="control-group">
-              <label className="control-label">Quarter</label>
-              <div className="mini-switch filing-quarter-switch">
-                {quarterOptions.map((option) => (
+            <div className="control-group filing-type-control-group">
+              <label className="control-label">Filing type</label>
+              <div className="mini-switch filing-type-switch">
+                {filingTypeOptions.map((option) => (
                   <button
                     key={option}
-                    className={document.quarter === option ? 'mode-button active' : 'mode-button'}
-                    onClick={() => onChange({ ...document, inputMode: 'ticker', quarter: option })}
+                    className={document.formType === option ? 'mode-button active' : 'mode-button'}
+                    onClick={() => onChange({
+                      ...document,
+                      inputMode: 'ticker',
+                      formType: option,
+                      quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
+                    })}
                     type="button"
                   >
                     {option}
                   </button>
                 ))}
               </div>
-              <div className="field-help">Quarter-aware retrieval is only used for 10-Q filings.</div>
             </div>
-          ) : null}
+          </div>
 
-          <div className="control-group">
-            <label className="control-label">Year (optional)</label>
-            <input
-              className={`text-input year-input ${yearError ? 'input-error' : ''}`}
-              type="text"
-              inputMode="numeric"
-              maxLength={4}
-              placeholder="2025"
-              value={document.year || ''}
-              onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
-            />
-            <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
+          <div className={`primary-controls-row primary-controls-row-bottom ${showQuarterSelector ? 'with-quarter' : 'without-quarter'}`}>
+            {showQuarterSelector ? (
+              <div className="control-group quarter-control-group">
+                <label className="control-label">Quarter</label>
+                <div className="mini-switch filing-quarter-switch">
+                  {quarterOptions.map((option) => (
+                    <button
+                      key={option}
+                      className={document.quarter === option ? 'mode-button active' : 'mode-button'}
+                      onClick={() => onChange({ ...document, inputMode: 'ticker', quarter: option })}
+                      type="button"
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+                <div className="field-help">Quarter-aware retrieval is only used for 10-Q filings.</div>
+              </div>
+            ) : null}
+
+            <div className="control-group year-control-group">
+              <label className="control-label">Year (optional)</label>
+              <input
+                className={`text-input year-input ${yearError ? 'input-error' : ''}`}
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="2025"
+                value={document.year || ''}
+                onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
+              />
+              <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
+            </div>
           </div>
         </div>
       </div>
