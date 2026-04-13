@@ -268,9 +268,6 @@ export default function App() {
               <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
                 {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
               </button>
-              <button className="secondary-button" onClick={handleReviewFiling} disabled={!filingReady || isReviewing || isProcessing}>
-                {isReviewing ? 'Reviewing…' : 'Review baseline first'}
-              </button>
             </div>
 
             {error ? <div className="error-banner">{error}</div> : null}
