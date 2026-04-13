@@ -737,21 +737,6 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
           </div>
 
           <div className={`primary-controls-row primary-controls-row-bottom ${showQuarterSelector ? 'with-quarter' : 'without-quarter'}`}>
-            {showQuarterSelector ? (
-            <div className="control-group quarter-control-group">
-              <label className="control-label">Quarter</label>
-              <select
-                className="text-input select-input"
-                value={document.quarter || 'Q1'}
-                onChange={(event) => onChange({ ...document, inputMode: 'ticker', quarter: event.target.value })}
-              >
-                {quarterOptions.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-
             <div className="control-group filing-type-control-group">
               <label className="control-label">Filing type</label>
               <select
@@ -769,6 +754,21 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
                 ))}
               </select>
             </div>
+
+            {showQuarterSelector ? (
+              <div className="control-group quarter-control-group">
+                <label className="control-label">Quarter</label>
+                <select
+                  className="text-input select-input"
+                  value={document.quarter || 'Q1'}
+                  onChange={(event) => onChange({ ...document, inputMode: 'ticker', quarter: event.target.value })}
+                >
+                  {quarterOptions.map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
