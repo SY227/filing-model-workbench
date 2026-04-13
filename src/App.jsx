@@ -267,7 +267,7 @@ export default function App() {
                   <div className="section-kicker">Workflow status</div>
                   <h2>Processing trail</h2>
                 </div>
-              {isProcessing ? <span className="live-pill">Live {workflowProgress}%</span> : null}
+              {isProcessing ? <span className="live-pill">Live</span> : null}
               </div>
               <div className="workflow-list">
                 {workflow.map((step) => (
@@ -277,7 +277,10 @@ export default function App() {
                     <div className="workflow-label">{step.label}</div>
                     <div className="workflow-note">{step.note}</div>
                   </div>
-                    <div className="workflow-status">{renderStatusLabel(step.status, runningDots)}</div>
+                    <div className="workflow-status-stack">
+                      <div className="workflow-status">{renderStatusLabel(step.status, runningDots)}</div>
+                      {step.status === 'active' ? <div className="workflow-progress">{workflowProgress}%</div> : null}
+                    </div>
                   </div>
                 ))}
               </div>

@@ -783,9 +783,23 @@ button {
   background: var(--success);
 }
 
+.workflow-status-stack {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
+
 .workflow-status {
   color: var(--muted-soft);
   font-size: 0.82rem;
+  font-weight: 700;
+  min-width: 92px;
+  text-align: right;
+}
+
+.workflow-progress {
+  color: var(--accent-ink);
+  font-size: 0.78rem;
   font-weight: 700;
   min-width: 92px;
   text-align: right;
