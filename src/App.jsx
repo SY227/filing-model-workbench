@@ -10,6 +10,9 @@ const workflowTemplate = [
 ];
 
 const scenarioKeys = ['base', 'upside', 'downside'];
+const moneyDisplayUnit = '$mm';
+const perShareDisplayUnit = '$ / share';
+const shareCountDisplayUnit = 'mm';
 const confidenceOrder = { high: 3, medium: 2, low: 1 };
 const classificationOrder = { reported: 4, derived: 3, proposed: 2, review_required: 1, missing: 0 };
 const filingTypeOptions = ['10-Q', '10-K'];
@@ -95,19 +98,20 @@ export default function App() {
       : filing.text.trim().length >= 1000;
   const activeMetadata = result?.filingMetadata || reviewPacket?.filingMetadata || null;
   const projectionLabels = useMemo(() => buildProjectionLabels(activeMetadata), [activeMetadata]);
-  const selectedScenarioModel = result ? result.modelPack.scenarios[selectedScenario] : null;
+  const selectedScenarioModel = result?.modelPack ? result.modelPack.scenarios[selectedScenario] : null;
+  const needsReview = Boolean(result && (!result.modelPack || result.analysisStatus?.state === 'needs_review'));
   const runningDots = '.'.repeat(runningDotCount);
 
   const heroMetrics = useMemo(() => {
-    if (!result) return [];
+    if (!result?.modelPack) return [];
     const comparisonMap = Object.fromEntries((result.modelPack.comparison || []).map((row) => [row.metric, row]));
     const valuationRange = result.modelPack.valuationSummary?.range || {};
     return [
       { label: 'Base value / share', value: formatPerShare(result.modelPack.scenarios.base.valuation.valuePerShare), tone: 'primary' },
-      { label: 'Base enterprise value', value: formatMoney(result.modelPack.scenarios.base.valuation.enterpriseValue), tone: 'neutral' },
-      { label: 'Valuation range', value: `${formatPerShare(valuationRange.low)} to ${formatPerShare(valuationRange.high)}`, tone: 'neutral' },
+      { label: withUnitLabel('Base enterprise value', moneyDisplayUnit), value: formatMoney(result.modelPack.scenarios.base.valuation.enterpriseValue), tone: 'neutral' },
+      { label: withUnitLabel('Valuation range', perShareDisplayUnit), value: `${formatPerShare(valuationRange.low)} to ${formatPerShare(valuationRange.high)}`, tone: 'neutral' },
       { label: 'FY+1 revenue growth', value: formatPercent(comparisonMap['FY+1 revenue growth']?.base), tone: 'neutral' },
-      { label: 'FY+5 revenue', value: formatMoney(comparisonMap['FY+5 revenue']?.base), tone: 'neutral' },
+      { label: withUnitLabel('FY+5 revenue', moneyDisplayUnit), value: formatMoney(comparisonMap['FY+5 revenue']?.base), tone: 'neutral' },
       { label: 'FY+5 operating margin', value: formatPercent(comparisonMap['FY+5 operating margin']?.base), tone: 'neutral' },
     ];
   }, [result]);
@@ -265,6 +269,9 @@ export default function App() {
               <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
                 {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
               </button>
+              <button className="secondary-button" onClick={handleReviewFiling} disabled={!filingReady || isReviewing || isProcessing}>
+                {isReviewing ? 'Reviewing…' : 'Review baseline first'}
+              </button>
             </div>
 
             {error ? <div className="error-banner">{error}</div> : null}
@@ -310,7 +317,7 @@ export default function App() {
                   <div className="section-kicker">Step 2</div>
                   <h2>Review extracted filing snapshot</h2>
                   <p className="review-copy">
-                    This preview isolates the filing metadata, reported base, and the internally drafted model baseline that will feed the deterministic model and valuation output.
+                    This preview isolates the deterministic filing facts, the drafted baseline, and any review blockers before the valuation model runs.
                   </p>
 
                   <div className="report-header-grid review-meta-grid">
@@ -319,8 +326,11 @@ export default function App() {
                     <MetaPill label="Period" value={reviewPacket.filingMetadata.period || 'Needs review'} />
                     {reviewPacket.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={reviewPacket.filingMetadata.fiscalQuarter} /> : null}
                     <MetaPill label="Filing date" value={reviewPacket.filingMetadata.filingDate || 'Needs review'} />
+                    <MetaPill label="Status" value={reviewPacket.analysisStatus?.state === 'needs_review' ? 'Needs review' : 'Ready'} />
                   </div>
 
+                  <ReviewStatusPanel analysisStatus={reviewPacket.analysisStatus} missingBaseInputs={reviewPacket.missingBaseInputs} reviewFlags={reviewPacket.reviewFlags} compact />
+                  <NormalizedMetricsCard metrics={reviewPacket.reportedBase?.normalizedMetrics} compact />
                   <DraftedBaselineTable draftedBaseline={reviewPacket.draftedBaseline} draftedBaselineMeta={reviewPacket.draftedBaselineMeta} compact />
                 </section>
               ) : (
@@ -344,199 +354,235 @@ export default function App() {
                     <MetaPill label="Period" value={result.filingMetadata.period || 'Needs review'} />
                     {result.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={result.filingMetadata.fiscalQuarter} /> : null}
                     <MetaPill label="Filing date" value={result.filingMetadata.filingDate || 'Needs review'} />
-                    <MetaPill label="Source" value="Public filing" />
+                    <MetaPill label="Status" value={needsReview ? 'Needs review' : 'Model ready'} />
                   </div>
 
                   <div className="report-hero-top report-hero-premium-top">
                     <div>
-                      <div className="section-kicker gold-kicker">Instant model output</div>
+                      <div className="section-kicker gold-kicker">{needsReview ? 'Review required' : 'Instant model output'}</div>
                       <h2>{result.filingMetadata.company || result.filingMetadata.title || 'Filing-grounded analysis'}</h2>
-                      <p className="hero-subcopy">A filing-grounded model and valuation frame with deterministic forecast math, disciplined scenario logic, and visible assumption classification.</p>
+                      <p className="hero-subcopy">
+                        {needsReview
+                          ? 'The filing was ingested, but key baseline inputs still need review before the app will present a valuation as complete.'
+                          : 'A filing-grounded model and valuation frame with deterministic forecast math, disciplined scenario logic, and visible assumption classification.'}
+                      </p>
                     </div>
                     <div className="action-cluster">
                       <button className="secondary-button" onClick={() => handleCopy('summary')}>Copy summary</button>
-                      <button className="secondary-button" onClick={() => handleCopy('forecast')}>Copy forecast</button>
+                      {!needsReview ? <button className="secondary-button" onClick={() => handleCopy('forecast')}>Copy forecast</button> : null}
                       <button className="secondary-button" onClick={() => handleDownload('assumptions')}>Assumptions CSV</button>
-                      <button className="secondary-button" onClick={() => handleDownload('forecast')}>Forecast CSV</button>
-                      <button className="secondary-button" onClick={() => handleDownload('valuation')}>Valuation CSV</button>
+                      {!needsReview ? <button className="secondary-button" onClick={() => handleDownload('forecast')}>Forecast CSV</button> : null}
+                      {!needsReview ? <button className="secondary-button" onClick={() => handleDownload('valuation')}>Valuation CSV</button> : null}
                       <button className="secondary-button" onClick={() => window.print()}>Export report</button>
                     </div>
                   </div>
 
-                  <div className="summary-stats-grid hero-metrics-grid">
-                    {heroMetrics.map((item) => (
-                      <HeroMetricCard key={item.label} label={item.label} value={item.value} tone={item.tone} />
-                    ))}
-                  </div>
+                  {!needsReview ? (
+                    <>
+                      <div className="mini-note">Dollar-denominated model outputs are shown in {moneyDisplayUnit}. Per-share outputs are labeled separately as {perShareDisplayUnit}.</div>
+                      <div className="summary-stats-grid hero-metrics-grid">
+                        {heroMetrics.map((item) => (
+                          <HeroMetricCard key={item.label} label={item.label} value={item.value} tone={item.tone} />
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
 
                   {copyFeedback ? <div className="copy-feedback">{copyFeedback}</div> : null}
                 </section>
 
-                <SectionCard title="Scenario overview" kicker="1" defaultOpen accent>
-                  <div className="section-controls compact-spacing">
-                    <div className="scenario-toggle horizontal-toggle">
-                      {scenarioKeys.map((scenarioKey) => (
-                        <button key={scenarioKey} className={selectedScenario === scenarioKey ? 'mode-button active' : 'mode-button'} onClick={() => setSelectedScenario(scenarioKey)} type="button">
-                          {capitalize(scenarioKey)}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="mini-note">Projection headers use fiscal-year estimate labels where the filing period supports a reasonable forward-year read-through.</div>
-                  </div>
+                {needsReview ? (
+                  <>
+                    <SectionCard title={`Needs review before valuation (${moneyDisplayUnit} unless noted)`} kicker="1" defaultOpen accent>
+                      <ReviewStatusPanel analysisStatus={result.analysisStatus} missingBaseInputs={result.missingBaseInputs} reviewFlags={result.reviewFlags} />
+                      <NormalizedMetricsCard metrics={result.reportedBase?.normalizedMetrics} />
+                    </SectionCard>
 
-                  <div className="table-wrap compact-spacing premium-table-wrap">
-                    <table className="forecast-table numeric-table elite-table">
-                      <thead>
-                        <tr>
-                          <th>Metric</th>
-                          {projectionLabels.map((label) => <th key={label} className="numeric-cell">{label}</th>)}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {forecastMetricRows(selectedScenarioModel).map((row) => (
-                          <tr key={row.label}>
-                            <td className="strong-cell">{row.label}</td>
-                            {row.values.map((value, index) => <td key={`${row.label}-${index}`} className="numeric-cell">{value}</td>)}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                    <SectionCard title={`Drafted baseline (${moneyDisplayUnit} unless noted)`} kicker="2" defaultOpen>
+                      <DraftedBaselineTable draftedBaseline={result.draftedBaseline} draftedBaselineMeta={result.draftedBaselineMeta} />
+                    </SectionCard>
 
-                  <div className="scenario-grid three-up premium-scenario-grid">
-                    {scenarioKeys.map((scenarioKey) => (
-                      <article key={scenarioKey} className={`scenario-summary-card scenario-hero-card ${scenarioKey}`}>
-                        <div className="scenario-label">{capitalize(scenarioKey)} case</div>
-                        <div className="scenario-summary-main">{formatPerShare(result.modelPack.scenarios[scenarioKey].valuation.valuePerShare)}</div>
-                        <div className="scenario-metric-grid">
-                          {buildScenarioHighlights(result.modelPack.scenarios[scenarioKey]).map((item) => (
-                            <div key={`${scenarioKey}-${item.label}`} className="scenario-metric-item">
-                              <span>{item.label}</span>
-                              <strong>{item.value}</strong>
-                            </div>
+                    <SectionCard title="Executive summary" kicker="3" defaultOpen>
+                      <div className="executive-headline">{result.executiveSummary?.headline}</div>
+                      <p className="executive-body">{result.executiveSummary?.body}</p>
+                      <ul className="bullet-list">
+                        {(result.executiveSummary?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
+                      </ul>
+                    </SectionCard>
+                  </>
+                ) : (
+                  <>
+                    <SectionCard title={`Scenario overview (${moneyDisplayUnit} unless noted)`} kicker="1" defaultOpen accent>
+                      <div className="section-controls compact-spacing">
+                        <div className="scenario-toggle horizontal-toggle">
+                          {scenarioKeys.map((scenarioKey) => (
+                            <button key={scenarioKey} className={selectedScenario === scenarioKey ? 'mode-button active' : 'mode-button'} onClick={() => setSelectedScenario(scenarioKey)} type="button">
+                              {capitalize(scenarioKey)}
+                            </button>
                           ))}
                         </div>
-                        <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
-                        <ul className="bullet-list compact-list inside-card">
-                          {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
-                        </ul>
-                      </article>
-                    ))}
-                  </div>
-                </SectionCard>
+                        <div className="mini-note">Projection headers use fiscal-year estimate labels where the filing period supports a reasonable forward-year read-through.</div>
+                      </div>
 
-                <SectionCard title="Valuation frame" kicker="2" defaultOpen accent>
-                  <p className="executive-body valuation-lead">{result.valuationSummary?.summary}</p>
-                  <div className="valuation-grid three-up compact-spacing premium-valuation-grid">
-                    <ValuationCard title="Base case" valuation={result.modelPack.scenarios.base.valuation} tone="base" />
-                    <ValuationCard title="Upside case" valuation={result.modelPack.scenarios.upside.valuation} tone="upside" />
-                    <ValuationCard title="Downside case" valuation={result.modelPack.scenarios.downside.valuation} tone="downside" />
-                  </div>
+                      <div className="mini-note">Dollar-denominated forecast lines are presented in {moneyDisplayUnit}. Per-share outputs stay labeled separately as {perShareDisplayUnit}.</div>
 
-                  {(result.valuationSummary?.scenarioStructure || []).length ? (
-                    <div className="missing-inputs-card compact-spacing premium-note-panel">
-                      <div className="section-subtitle">Scenario structure</div>
-                      <ul className="bullet-list compact-list">
-                        {result.valuationSummary.scenarioStructure.map((item) => <li key={item}>{item}</li>)}
-                      </ul>
-                    </div>
-                  ) : null}
-                </SectionCard>
-
-                <SectionCard title="Base-case enterprise value sensitivity" kicker="3" defaultOpen accent>
-                  <div className="sensitivity-hero-card">
-                    <div className="sensitivity-hero-copy">
-                      <div className="section-subtitle">Key valuation artifact</div>
-                      <p className="executive-body">The base-case EV matrix frames valuation sensitivity against WACC and terminal growth, designed to surface the most decision-relevant range quickly.</p>
-                    </div>
-                    <div className="table-wrap compact-wrap premium-table-wrap sensitivity-matrix-wrap">
-                      <table className="sensitivity-table numeric-table elite-table sensitivity-matrix-table">
-                        <thead>
-                          <tr>
-                            <th>Terminal growth \\ WACC</th>
-                            {result.modelPack.baseSensitivity.waccValues.map((value) => <th key={value} className="numeric-cell">{formatPercent(value)}</th>)}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {result.modelPack.baseSensitivity.terminalGrowthValues.map((terminalValue, rowIndex) => (
-                            <tr key={terminalValue}>
-                              <td className="strong-cell">{formatPercent(terminalValue)}</td>
-                              {result.modelPack.baseSensitivity.matrix[rowIndex].map((cell, cellIndex) => <td key={`${terminalValue}-${cellIndex}`} className={`numeric-cell sensitivity-cell ${cellIndex === 1 && rowIndex === 1 ? 'midpoint' : ''}`}>{formatMoney(cell)}</td>)}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </SectionCard>
-
-                <SectionCard title="Valuation bridge and key deltas" kicker="4" defaultOpen>
-                  <div className="two-column-grid detail-grid">
-                    <div className="split-panel premium-panel-soft">
-                      <div className="split-header">Change vs prior</div>
-                      <div className="table-wrap compact-wrap premium-table-wrap">
-                        <table className="delta-table numeric-table elite-table compact-finance-table">
+                      <div className="table-wrap compact-spacing premium-table-wrap">
+                        <table className="forecast-table numeric-table elite-table">
                           <thead>
                             <tr>
                               <th>Metric</th>
-                              <th className="numeric-cell">Prior</th>
-                              <th className="numeric-cell">Current</th>
-                              <th className="numeric-cell">Delta</th>
+                              {projectionLabels.map((label) => <th key={label} className="numeric-cell">{label}</th>)}
                             </tr>
                           </thead>
                           <tbody>
-                            {(result.modelPack.changeVsPrior || []).map((row) => (
-                              <tr key={row.metric}>
-                                <td className="strong-cell">{row.metric}</td>
-                                <td className="numeric-cell">{formatByType(row.prior, row.format)}</td>
-                                <td className="numeric-cell">{formatByType(row.revised, row.format)}</td>
-                                <td className="numeric-cell emphasis-cell">{formatByType(row.delta, row.format)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                    <div className="split-panel premium-panel-soft">
-                      <div className="split-header">Valuation bridge</div>
-                      <div className="table-wrap compact-wrap premium-table-wrap">
-                        <table className="delta-table numeric-table elite-table compact-finance-table">
-                          <thead>
-                            <tr>
-                              <th>Bridge step</th>
-                              <th className="numeric-cell">Enterprise value</th>
-                              <th className="numeric-cell">Delta</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(result.modelPack.valuationBridge || []).map((row) => (
-                              <tr key={row.key}>
+                            {forecastMetricRows(selectedScenarioModel).map((row) => (
+                              <tr key={row.label}>
                                 <td className="strong-cell">{row.label}</td>
-                                <td className="numeric-cell">{formatMoney(row.enterpriseValue)}</td>
-                                <td className="numeric-cell emphasis-cell">{formatMoney(row.delta)}</td>
+                                {row.values.map((value, index) => <td key={`${row.label}-${index}`} className="numeric-cell">{value}</td>)}
                               </tr>
                             ))}
                           </tbody>
                         </table>
                       </div>
-                    </div>
-                  </div>
-                </SectionCard>
 
-                <SectionCard title="AI-drafted model assumptions" kicker="5" defaultOpen>
-                  <p className="executive-body">
-                    Gemini drafts the normalized model baseline directly from the filing. Deterministic forecast and valuation math run from this baseline, with uncertainty kept visible and classified field by field.
-                  </p>
-                  <DraftedBaselineTable draftedBaseline={result.draftedBaseline} draftedBaselineMeta={result.draftedBaselineMeta} />
-                </SectionCard>
+                      <div className="scenario-grid three-up premium-scenario-grid">
+                        {scenarioKeys.map((scenarioKey) => (
+                          <article key={scenarioKey} className={`scenario-summary-card scenario-hero-card ${scenarioKey}`}>
+                            <div className="scenario-label">{capitalize(scenarioKey)} case</div>
+                            <div className="scenario-summary-main">{formatPerShare(result.modelPack.scenarios[scenarioKey].valuation.valuePerShare)}</div>
+                            <div className="valuation-sub">Implied value / share</div>
+                            <div className="scenario-metric-grid">
+                              {buildScenarioHighlights(result.modelPack.scenarios[scenarioKey]).map((item) => (
+                                <div key={`${scenarioKey}-${item.label}`} className="scenario-metric-item">
+                                  <span>{item.label}</span>
+                                  <strong>{item.value}</strong>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
+                            <ul className="bullet-list compact-list inside-card">
+                              {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
+                            </ul>
+                          </article>
+                        ))}
+                      </div>
+                    </SectionCard>
 
-                <SectionCard title="Executive summary" kicker="6" defaultOpen>
-                  <div className="executive-headline">{result.executiveSummary?.headline}</div>
-                  <p className="executive-body">{result.executiveSummary?.body}</p>
-                  <ul className="bullet-list">
-                    {(result.executiveSummary?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
-                  </ul>
-                </SectionCard>
+                    <SectionCard title="Valuation frame" kicker="2" defaultOpen accent>
+                      <p className="executive-body valuation-lead">{result.valuationSummary?.summary}</p>
+                      <div className="mini-note">Enterprise value and equity value are shown in {moneyDisplayUnit}. Value / share remains labeled separately as {perShareDisplayUnit}.</div>
+                      <div className="valuation-grid three-up compact-spacing premium-valuation-grid">
+                        <ValuationCard title="Base case" valuation={result.modelPack.scenarios.base.valuation} tone="base" />
+                        <ValuationCard title="Upside case" valuation={result.modelPack.scenarios.upside.valuation} tone="upside" />
+                        <ValuationCard title="Downside case" valuation={result.modelPack.scenarios.downside.valuation} tone="downside" />
+                      </div>
+
+                      {(result.valuationSummary?.scenarioStructure || []).length ? (
+                        <div className="missing-inputs-card compact-spacing premium-note-panel">
+                          <div className="section-subtitle">Scenario structure</div>
+                          <ul className="bullet-list compact-list">
+                            {result.valuationSummary.scenarioStructure.map((item) => <li key={item}>{item}</li>)}
+                          </ul>
+                        </div>
+                      ) : null}
+                    </SectionCard>
+
+                    <SectionCard title={`Base-case enterprise value sensitivity (${moneyDisplayUnit})`} kicker="3" defaultOpen accent>
+                      <div className="sensitivity-hero-card">
+                        <div className="sensitivity-hero-copy">
+                          <div className="section-subtitle">Key valuation artifact, enterprise value shown in {moneyDisplayUnit}</div>
+                          <p className="executive-body">The base-case EV matrix frames valuation sensitivity against WACC and terminal growth, designed to surface the most decision-relevant range quickly.</p>
+                        </div>
+                        <div className="table-wrap compact-wrap premium-table-wrap sensitivity-matrix-wrap">
+                          <table className="sensitivity-table numeric-table elite-table sensitivity-matrix-table">
+                            <thead>
+                              <tr>
+                                <th>Terminal growth \\ WACC</th>
+                                {result.modelPack.baseSensitivity.waccValues.map((value) => <th key={value} className="numeric-cell">{formatPercent(value)}</th>)}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {result.modelPack.baseSensitivity.terminalGrowthValues.map((terminalValue, rowIndex) => (
+                                <tr key={terminalValue}>
+                                  <td className="strong-cell">{formatPercent(terminalValue)}</td>
+                                  {result.modelPack.baseSensitivity.matrix[rowIndex].map((cell, cellIndex) => <td key={`${terminalValue}-${cellIndex}`} className={`numeric-cell sensitivity-cell ${cellIndex === 1 && rowIndex === 1 ? 'midpoint' : ''}`}>{formatMoney(cell)}</td>)}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </SectionCard>
+
+                    <SectionCard title={`Valuation bridge and key deltas (${moneyDisplayUnit} unless noted)`} kicker="4" defaultOpen>
+                      <div className="two-column-grid detail-grid">
+                        <div className="split-panel premium-panel-soft">
+                          <div className="split-header">Change vs prior ({moneyDisplayUnit} unless noted)</div>
+                          <div className="table-wrap compact-wrap premium-table-wrap">
+                            <table className="delta-table numeric-table elite-table compact-finance-table">
+                              <thead>
+                                <tr>
+                                  <th>Metric / unit</th>
+                                  <th className="numeric-cell">Prior</th>
+                                  <th className="numeric-cell">Current</th>
+                                  <th className="numeric-cell">Delta</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(result.modelPack.changeVsPrior || []).map((row) => (
+                                  <tr key={row.metric}>
+                                    <td className="strong-cell">{formatMetricLabel(row.metric, row.format)}</td>
+                                    <td className="numeric-cell">{formatByType(row.prior, row.format)}</td>
+                                    <td className="numeric-cell">{formatByType(row.revised, row.format)}</td>
+                                    <td className="numeric-cell emphasis-cell">{formatByType(row.delta, row.format)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                        <div className="split-panel premium-panel-soft">
+                          <div className="split-header">Valuation bridge ({moneyDisplayUnit})</div>
+                          <div className="table-wrap compact-wrap premium-table-wrap">
+                            <table className="delta-table numeric-table elite-table compact-finance-table">
+                              <thead>
+                                <tr>
+                                  <th>Bridge step</th>
+                                  <th className="numeric-cell">Enterprise value ({moneyDisplayUnit})</th>
+                                  <th className="numeric-cell">Delta ({moneyDisplayUnit})</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(result.modelPack.valuationBridge || []).map((row) => (
+                                  <tr key={row.key}>
+                                    <td className="strong-cell">{row.label}</td>
+                                    <td className="numeric-cell">{formatMoney(row.enterpriseValue)}</td>
+                                    <td className="numeric-cell emphasis-cell">{formatMoney(row.delta)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+                    </SectionCard>
+
+                    <SectionCard title={`AI-drafted model assumptions (${moneyDisplayUnit} unless noted)`} kicker="5" defaultOpen>
+                      <p className="executive-body">
+                        Hard numeric baseline fields are deterministic-first, while the AI is used for softer assumptions, commentary, and review notes.
+                      </p>
+                      <DraftedBaselineTable draftedBaseline={result.draftedBaseline} draftedBaselineMeta={result.draftedBaselineMeta} />
+                    </SectionCard>
+
+                    <SectionCard title="Executive summary" kicker="6" defaultOpen>
+                      <div className="executive-headline">{result.executiveSummary?.headline}</div>
+                      <p className="executive-body">{result.executiveSummary?.body}</p>
+                      <ul className="bullet-list">
+                        {(result.executiveSummary?.bullets || []).map((bullet) => <li key={bullet}>{bullet}</li>)}
+                      </ul>
+                    </SectionCard>
+                  </>
+                )}
               </>
             )}
         </section>
@@ -548,7 +594,9 @@ export default function App() {
 function DraftedBaselineTable({ draftedBaseline, draftedBaselineMeta, compact = false }) {
   if (!draftedBaseline) return null;
   return (
-    <div className="table-wrap compact-spacing premium-table-wrap">
+    <>
+      <div className="mini-note">Dollar-denominated drafted inputs are shown in {moneyDisplayUnit}. Share counts stay labeled separately in {shareCountDisplayUnit}.</div>
+      <div className="table-wrap compact-spacing premium-table-wrap">
       <table className={`delta-table assumption-table numeric-table elite-table ${compact ? 'compact-table' : ''}`}>
         <thead>
           <tr>
@@ -576,6 +624,60 @@ function DraftedBaselineTable({ draftedBaseline, draftedBaselineMeta, compact = 
           })}
         </tbody>
       </table>
+      </div>
+    </>
+  );
+}
+
+function ReviewStatusPanel({ analysisStatus, missingBaseInputs = [], reviewFlags = [], compact = false }) {
+  const blockingIssues = analysisStatus?.blockingIssues || [];
+  const checks = analysisStatus?.checks || [];
+  return (
+    <div className="missing-inputs-card compact-spacing premium-note-panel">
+      <div className="section-subtitle">{analysisStatus?.state === 'needs_review' ? 'Needs review' : 'Validation status'}</div>
+      <p className="executive-body">{analysisStatus?.summary || 'No review status available.'}</p>
+      {blockingIssues.length ? (
+        <ul className="bullet-list compact-list">
+          {blockingIssues.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      ) : null}
+      {!blockingIssues.length && checks.length ? (
+        <ul className="bullet-list compact-list">
+          {checks.filter((check) => check.passed).slice(0, compact ? 3 : 6).map((check) => <li key={check.label}>{check.label}</li>)}
+        </ul>
+      ) : null}
+      {missingBaseInputs.length ? (
+        <div className="mini-note">Unresolved inputs: {missingBaseInputs.map((item) => item.field).join(', ')}</div>
+      ) : null}
+      {reviewFlags.length ? (
+        <div className="mini-note">Review flags: {reviewFlags.slice(0, compact ? 2 : 4).map((item) => item.item).join(' • ')}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function NormalizedMetricsCard({ metrics, compact = false }) {
+  const items = [
+    { label: withUnitLabel('Revenue base', moneyDisplayUnit), value: formatMoney(metrics?.revenueLtm) },
+    { label: 'Gross margin', value: formatPercent(metrics?.grossMarginPct) },
+    { label: 'Operating margin', value: formatPercent(metrics?.operatingMarginPct) },
+    { label: 'Tax rate', value: formatPercent(metrics?.taxRatePct) },
+    { label: 'Capex / revenue', value: formatPercent(metrics?.capexPctRevenue) },
+    { label: 'D&A / revenue', value: formatPercent(metrics?.daPctRevenue) },
+    { label: withUnitLabel('Diluted shares', shareCountDisplayUnit), value: formatCount(metrics?.shareCount) },
+    { label: withUnitLabel('Cash', moneyDisplayUnit), value: formatMoney(metrics?.cash) },
+    { label: withUnitLabel('Debt', moneyDisplayUnit), value: formatMoney(metrics?.debt) },
+    { label: withUnitLabel('Net debt / (cash)', moneyDisplayUnit), value: formatMoney(metrics?.netDebt) },
+  ];
+
+  return (
+    <div className="split-panel premium-panel-soft">
+      <div className="split-header">Deterministic extracted base metrics ({moneyDisplayUnit} unless noted)</div>
+      <div className="summary-stats-grid hero-metrics-grid">
+        {items.slice(0, compact ? 6 : items.length).map((item) => (
+          <HeroMetricCard key={item.label} label={item.label} value={item.value} tone="neutral" />
+        ))}
+      </div>
     </div>
   );
 }
@@ -726,10 +828,10 @@ function ValuationCard({ title, valuation, tone }) {
     <article className={`valuation-card premium-valuation-card ${tone}`}>
       <div className="scenario-label">{title}</div>
       <div className="valuation-main">{formatPerShare(valuation.valuePerShare)}</div>
-      <div className="valuation-sub">Implied value per share</div>
+      <div className="valuation-sub">Implied value / share</div>
       <div className="valuation-list compact-listing">
-        <ValuationLine label="Enterprise value" value={formatMoney(valuation.enterpriseValue)} />
-        <ValuationLine label="Equity value" value={formatMoney(valuation.equityValue)} />
+        <ValuationLine label={withUnitLabel('Enterprise value', moneyDisplayUnit)} value={formatMoney(valuation.enterpriseValue)} />
+        <ValuationLine label={withUnitLabel('Equity value', moneyDisplayUnit)} value={formatMoney(valuation.equityValue)} />
         <ValuationLine label="WACC" value={formatPercent(valuation.wacc)} />
         <ValuationLine label="Terminal growth" value={formatPercent(valuation.terminalGrowth)} />
       </div>
@@ -805,6 +907,11 @@ function formatPerShare(value) {
   return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
 }
 
+function formatCount(value) {
+  if (!Number.isFinite(Number(value))) return '—';
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
 function formatByType(value, format) {
   if (format === 'percent') return formatPercent(value);
   if (format === 'perShare') return formatPerShare(value);
@@ -842,17 +949,27 @@ function forecastMetricRows(scenarioModel) {
     { label: 'Free cash flow', key: 'freeCashFlow', format: 'money' },
   ];
 
-  return rows.map((row) => ({ label: row.label, values: (scenarioModel?.forecastTable || []).map((item) => (row.format === 'percent' ? formatPercent(item[row.key]) : formatMoney(item[row.key]))) }));
+  return rows.map((row) => ({ label: formatMetricLabel(row.label, row.format), values: (scenarioModel?.forecastTable || []).map((item) => (row.format === 'percent' ? formatPercent(item[row.key]) : formatMoney(item[row.key]))) }));
 }
 
 function buildScenarioHighlights(scenarioModel) {
   const finalYear = scenarioModel?.forecastTable?.at(-1) || null;
   return [
-    { label: 'Enterprise value', value: formatMoney(scenarioModel?.valuation?.enterpriseValue) },
+    { label: withUnitLabel('Enterprise value', moneyDisplayUnit), value: formatMoney(scenarioModel?.valuation?.enterpriseValue) },
     { label: 'FY+1 rev growth', value: formatPercent(scenarioModel?.forecastTable?.[0]?.revenueGrowth) },
     { label: 'FY+5 op margin', value: formatPercent(finalYear?.operatingMargin) },
-    { label: 'FY+5 FCF', value: formatMoney(finalYear?.freeCashFlow) },
+    { label: withUnitLabel('FY+5 FCF', moneyDisplayUnit), value: formatMoney(finalYear?.freeCashFlow) },
   ];
+}
+
+function withUnitLabel(label, unit) {
+  return `${label} (${unit})`;
+}
+
+function formatMetricLabel(label, format) {
+  if (format === 'money') return withUnitLabel(label, moneyDisplayUnit);
+  if (format === 'perShare') return withUnitLabel(label, perShareDisplayUnit);
+  return label;
 }
 
 function buildProjectionLabels(metadata, count = horizonLabels.length) {
@@ -914,7 +1031,7 @@ function buildCsvPayload(kind, result, projectionHeaders) {
 }
 
 function buildAssumptionCsv(result) {
-  const lines = ['Field,Drafted value,Classification,Rationale,Evidence,Confidence'];
+  const lines = ['Field / unit,Drafted value,Classification,Rationale,Evidence,Confidence'];
   baselineFieldOrder.forEach((field) => {
     const meta = result.draftedBaselineMeta?.[field] || {};
     lines.push([
@@ -930,7 +1047,7 @@ function buildAssumptionCsv(result) {
 }
 
 function buildForecastCsv(result, projectionHeaders) {
-  const lines = ['Scenario,Metric,' + projectionHeaders.join(',')];
+  const lines = ['Scenario,Metric / unit,' + projectionHeaders.join(',')];
   scenarioKeys.forEach((scenarioKey) => {
     forecastMetricRows(result.modelPack.scenarios[scenarioKey]).forEach((row) => {
       lines.push([capitalize(scenarioKey), escapeCsv(row.label), ...row.values.map(escapeCsv)].join(','));
@@ -940,7 +1057,7 @@ function buildForecastCsv(result, projectionHeaders) {
 }
 
 function buildValuationCsv(result) {
-  const lines = ['Scenario,Enterprise value,Equity value,Value per share,WACC,Terminal growth'];
+  const lines = [`Scenario,Enterprise value (${moneyDisplayUnit}),Equity value (${moneyDisplayUnit}),Value per share (${perShareDisplayUnit}),WACC,Terminal growth`];
   scenarioKeys.forEach((key) => {
     const valuation = result.modelPack.scenarios[key].valuation;
     lines.push([capitalize(key), valuation.enterpriseValue, valuation.equityValue, valuation.valuePerShare, valuation.wacc, valuation.terminalGrowth].map(escapeCsv).join(','));
@@ -949,7 +1066,7 @@ function buildValuationCsv(result) {
 }
 
 function buildForecastTsv(result, projectionHeaders) {
-  const rows = [['Scenario', 'Metric', ...projectionHeaders]];
+  const rows = [['Scenario', 'Metric / unit', ...projectionHeaders]];
   scenarioKeys.forEach((scenarioKey) => {
     forecastMetricRows(result.modelPack.scenarios[scenarioKey]).forEach((row) => {
       rows.push([capitalize(scenarioKey), row.label, ...row.values]);
