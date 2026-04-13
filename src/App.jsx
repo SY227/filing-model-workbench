@@ -186,17 +186,17 @@ export default function App() {
     <div className="app-shell">
       <main className="page">
         <section className="top-workspace-grid">
-          <section className="hero hero-premium card title-card premium-panel">
-            <div className="hero-copy-block title-card-copy-block">
-              <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
-              <h1>Filing Model Workbench</h1>
-              <p className="hero-copy">
-                Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
-              </p>
+          <section className="card input-card premium-panel combined-intake-card">
+            <div className="hero hero-premium combined-intake-hero">
+              <div className="hero-copy-block combined-intake-copy-block">
+                <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
+                <h1>Filing Model Workbench</h1>
+                <p className="hero-copy">
+                  Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
+                </p>
+              </div>
             </div>
-          </section>
 
-          <section className="card input-card premium-panel top-panel-card">
             <div className="section-header">
               <div>
                 <div className="section-kicker">Step 1</div>
