@@ -671,6 +671,11 @@ button {
   background: #fcfeff;
 }
 
+.ticker-input::placeholder,
+.year-input::placeholder {
+  color: #bcc7d4;
+}
+
 .sample-chips,
 .workflow-list,
 .stack-list,

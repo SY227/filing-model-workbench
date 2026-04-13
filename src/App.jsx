@@ -722,7 +722,7 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
             </div>
 
             <div className="control-group year-control-group year-control-group-top">
-              <label className="control-label">Year (optional)</label>
+              <label className="control-label">Year</label>
               <input
                 className={`text-input year-input ${yearError ? 'input-error' : ''}`}
                 type="text"
