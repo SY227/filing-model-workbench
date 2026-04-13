@@ -450,6 +450,7 @@ button {
 .ticker-input {
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  margin-top: 4px;
 }
 
 .filing-type-switch,
