@@ -373,27 +373,6 @@ export default function App() {
                 </section>
 
                 <SectionCard title="Scenario overview" kicker="1" defaultOpen accent>
-                  <div className="scenario-grid three-up premium-scenario-grid">
-                    {scenarioKeys.map((scenarioKey) => (
-                      <article key={scenarioKey} className={`scenario-summary-card scenario-hero-card ${scenarioKey}`}>
-                        <div className="scenario-label">{capitalize(scenarioKey)} case</div>
-                        <div className="scenario-summary-main">{formatPerShare(result.modelPack.scenarios[scenarioKey].valuation.valuePerShare)}</div>
-                        <div className="scenario-metric-grid">
-                          {buildScenarioHighlights(result.modelPack.scenarios[scenarioKey]).map((item) => (
-                            <div key={`${scenarioKey}-${item.label}`} className="scenario-metric-item">
-                              <span>{item.label}</span>
-                              <strong>{item.value}</strong>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
-                        <ul className="bullet-list compact-list inside-card">
-                          {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
-                        </ul>
-                      </article>
-                    ))}
-                  </div>
-
                   <div className="section-controls compact-spacing">
                     <div className="scenario-toggle horizontal-toggle">
                       {scenarioKeys.map((scenarioKey) => (
@@ -422,6 +401,27 @@ export default function App() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+
+                  <div className="scenario-grid three-up premium-scenario-grid">
+                    {scenarioKeys.map((scenarioKey) => (
+                      <article key={scenarioKey} className={`scenario-summary-card scenario-hero-card ${scenarioKey}`}>
+                        <div className="scenario-label">{capitalize(scenarioKey)} case</div>
+                        <div className="scenario-summary-main">{formatPerShare(result.modelPack.scenarios[scenarioKey].valuation.valuePerShare)}</div>
+                        <div className="scenario-metric-grid">
+                          {buildScenarioHighlights(result.modelPack.scenarios[scenarioKey]).map((item) => (
+                            <div key={`${scenarioKey}-${item.label}`} className="scenario-metric-item">
+                              <span>{item.label}</span>
+                              <strong>{item.value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="scenario-summary-copy">{result.scenarioWriteups?.[scenarioKey]?.summary || result.modelPack.scenarios[scenarioKey].narrative?.summary}</div>
+                        <ul className="bullet-list compact-list inside-card">
+                          {(result.scenarioWriteups?.[scenarioKey]?.bullets || result.modelPack.scenarios[scenarioKey].narrative?.keyAssumptions || []).map((item) => <li key={item}>{item}</li>)}
+                        </ul>
+                      </article>
+                    ))}
                   </div>
                 </SectionCard>
 
