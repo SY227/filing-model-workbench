@@ -6,14 +6,16 @@ const BANKER_STYLE = `Style requirements:
 - do not fabricate missing figures, precision, consensus data, or management intent
 - if evidence is thin, say so and keep scenario adjustments measured`;
 
-export function buildFilingExtractionPrompt({ filing }) {
+export function buildFilingExtractionPrompt({ filing, deterministicPacket }) {
   return `You are extracting a filing-grounded analysis base from a single public-company filing.
 
 ${BANKER_STYLE}
 
 The filing is the only primary source for this task.
+A deterministic SEC extraction packet is provided below and is authoritative for hard numeric baseline facts when present.
 Return strict JSON only. Do not wrap in markdown.
 Do not invent numbers. Use null when a value is not directly supportable.
+Do not replace stronger deterministic SEC values with a weaker textual guess.
 
 Required JSON shape:
 {
@@ -104,10 +106,13 @@ Required JSON shape:
 }
 
 Filing packet:
-${JSON.stringify(filing, null, 2)}`;
+${JSON.stringify(filing, null, 2)}
+
+Authoritative deterministic SEC packet:
+${JSON.stringify(deterministicPacket, null, 2)}`;
 }
 
-export function buildFilingAnalysisPrompt({ filingExtraction }) {
+export function buildFilingAnalysisPrompt({ filingExtraction, deterministicPacket }) {
   return `You are producing filing-grounded model framing from a single 10-Q or 10-K.
 
 ${BANKER_STYLE}
@@ -116,7 +121,9 @@ Your job is to translate the filing into disciplined external-analyst work produ
 Preserve a measured tone. Do not overstate what the filing alone can prove.
 Scenario adjustments should be suitable for a deterministic model layer.
 
-Critically, you must draft a complete normalized model baseline for deterministic forecast and valuation math.
+Critically, deterministic SEC extraction owns the hard quantitative baseline whenever it is available.
+For these hard fields, treat the deterministic packet as primary: currentRevenue, shareCount, cash, debt, netDebt, grossMarginStart, operatingMarginStart, taxRate, capexPct, daPct.
+Only use AI as a last-resort fallback when the deterministic packet is blank, and clearly mark that as review_required with low confidence.
 Where the filing directly supports a field, mark it reported.
 Where the field is mechanically inferred from disclosed information, mark it derived.
 Where the field requires analyst judgment, mark it proposed.
@@ -238,10 +245,13 @@ Required JSON shape:
 }
 
 Filing extraction JSON:
-${JSON.stringify(filingExtraction, null, 2)}`;
+${JSON.stringify(filingExtraction, null, 2)}
+
+Deterministic SEC packet:
+${JSON.stringify(deterministicPacket, null, 2)}`;
 }
 
-export function buildReportFormattingPrompt({ filingExtraction, filingAnalysis, modelSummary }) {
+export function buildReportFormattingPrompt({ filingExtraction, filingAnalysis, modelSummary, analysisStatus }) {
   return `You are formatting a filing-grounded analysis pack for a client-ready finance workflow.
 
 ${BANKER_STYLE}
@@ -249,6 +259,7 @@ ${BANKER_STYLE}
 The output should read like polished banker or senior-analyst work product.
 Return strict JSON only. Do not wrap in markdown.
 Keep it sharp and measured.
+If analysisStatus.state is "needs_review", say so plainly and do not present the valuation as complete or trustworthy.
 
 Required JSON shape:
 {
@@ -279,5 +290,8 @@ Filing analysis JSON:
 ${JSON.stringify(filingAnalysis, null, 2)}
 
 Deterministic model summary:
-${JSON.stringify(modelSummary, null, 2)}`;
+${JSON.stringify(modelSummary, null, 2)}
+
+Analysis status:
+${JSON.stringify(analysisStatus, null, 2)}`;
 }

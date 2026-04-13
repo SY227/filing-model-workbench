@@ -86,6 +86,7 @@ export function buildSourcePacketForPrompt(source, maxChars = 12_000) {
     title: source.title,
     metadata: source.fallbackMetadata,
     excerpt: clampText(source.cleanedText, maxChars),
+    targetedSections: source.promptSections || [],
   };
 }
 
@@ -120,6 +121,7 @@ function ingestPastedText(text, { kind, label, title }) {
     rawText: text,
     cleanedText,
     fallbackMetadata,
+    promptSections: extractPromptSections(cleanedText),
   };
 }
 
@@ -194,6 +196,7 @@ async function fetchSourceFromUrl(url, { kind, label, titleOverride }) {
     rawText: raw,
     cleanedText,
     fallbackMetadata,
+    promptSections: extractPromptSections(cleanedText),
   };
 }
 
@@ -341,6 +344,57 @@ function extractMetadataYear(value) {
 function buildReportingPeriodLabel(fiscalQuarter, fiscalYear) {
   if (!fiscalQuarter || !fiscalYear) return null;
   return `${fiscalQuarter} ${fiscalYear}`;
+}
+
+function extractPromptSections(cleanedText, maxSectionChars = 2800) {
+  const text = String(cleanedText || '');
+  if (!text) return [];
+
+  const sectionDefinitions = [
+    { title: 'Management discussion', patterns: [/management'?s discussion and analysis/i, /md&a/i] },
+    { title: 'Results of operations', patterns: [/results of operations/i] },
+    { title: 'Liquidity and capital resources', patterns: [/liquidity and capital resources/i] },
+    { title: 'Business overview', patterns: [/business/i, /overview/i] },
+    { title: 'Risk factors', patterns: [/risk factors/i] },
+  ];
+
+  const sections = [];
+  for (const definition of sectionDefinitions) {
+    const match = findSectionSnippet(text, definition.patterns, maxSectionChars);
+    if (match) sections.push({ title: definition.title, excerpt: match });
+  }
+
+  if (!sections.length) {
+    sections.push({ title: 'Opening excerpt', excerpt: clampText(text, Math.min(maxSectionChars, 2400)) });
+  }
+
+  return sections.slice(0, 5);
+}
+
+function findSectionSnippet(text, patterns, maxSectionChars) {
+  const lines = text.split('\n');
+  const index = lines.findIndex((line) => patterns.some((pattern) => pattern.test(line)));
+  if (index === -1) return '';
+
+  const collected = [];
+  let charCount = 0;
+  for (let i = index; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    if (i > index && isLikelySectionHeading(line)) break;
+    collected.push(line);
+    charCount += line.length + 1;
+    if (charCount >= maxSectionChars) break;
+  }
+
+  return collected.join('\n').trim();
+}
+
+function isLikelySectionHeading(line) {
+  if (!line) return false;
+  if (/^item\s+\d+/i.test(line)) return true;
+  if (/^[A-Z][A-Z\s,&\-]{12,}$/.test(line)) return true;
+  return /management'?s discussion and analysis|results of operations|liquidity and capital resources|risk factors|quantitative and qualitative disclosures/i.test(line);
 }
 
 function buildRequestHeaders(parsedUrl) {

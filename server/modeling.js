@@ -14,6 +14,8 @@ export const DEFAULT_BASELINE = {
   capexPct: 3.5,
   daPct: 2.0,
   nwcPct: 1.0,
+  workingCapitalTargetPct: 1.0,
+  workingCapitalProfile: 'balanced',
   wacc: 9.0,
   terminalGrowth: 2.5,
   shareCount: 100,
@@ -51,6 +53,8 @@ export function normalizeBaseline(input = {}) {
     capexPct: clampNumber(input.capexPct, DEFAULT_BASELINE.capexPct, 0, 20),
     daPct: clampNumber(input.daPct, DEFAULT_BASELINE.daPct, 0, 15),
     nwcPct: clampNumber(input.nwcPct, DEFAULT_BASELINE.nwcPct, -10, 15),
+    workingCapitalTargetPct: clampNumber(input.workingCapitalTargetPct, clampNumber(input.nwcPct, DEFAULT_BASELINE.workingCapitalTargetPct, -10, 15), -10, 15),
+    workingCapitalProfile: ['negative', 'light', 'balanced', 'inventory_heavy'].includes(input.workingCapitalProfile) ? input.workingCapitalProfile : DEFAULT_BASELINE.workingCapitalProfile,
     wacc: clampNumber(input.wacc, DEFAULT_BASELINE.wacc, 4, 20),
     terminalGrowth: clampNumber(input.terminalGrowth, DEFAULT_BASELINE.terminalGrowth, -2, 6),
     shareCount: clampNumber(input.shareCount, DEFAULT_BASELINE.shareCount, 0.1, 10_000_000),
@@ -127,7 +131,11 @@ function buildScenarioModel(label, baseline, adjustment) {
   const revenueGrowth = baseline.revenueGrowth.map((value, index) => clamp(value + adjustment.revenueGrowthDeltaPpts[index], -50, 60));
   const capexPctPath = YEAR_LABELS.map((_year, index) => clamp(baseline.capexPct + adjustment.capexPctDeltaBps[index] / 100, 0, 25));
   const daPctPath = YEAR_LABELS.map((_year, index) => clamp(baseline.daPct + adjustment.daPctDeltaBps[index] / 100, 0, 20));
-  const nwcPctPath = YEAR_LABELS.map((_year, index) => clamp(baseline.nwcPct + adjustment.nwcPctDeltaBps[index] / 100, -20, 20));
+  const nwcPctPath = buildWorkingCapitalPath({
+    startPct: baseline.nwcPct,
+    targetPct: baseline.workingCapitalTargetPct,
+    profile: baseline.workingCapitalProfile,
+  }).map((value, index) => clamp(value + adjustment.nwcPctDeltaBps[index] / 100, -20, 20));
   const taxRatePath = YEAR_LABELS.map((_year, index) => clamp(baseline.taxRate + adjustment.taxRateDeltaBps[index] / 100, 0, 45));
   const wacc = clamp(baseline.wacc + adjustment.waccDeltaBps / 100, 4, 20);
   const terminalGrowth = clamp(baseline.terminalGrowth + adjustment.terminalGrowthDeltaBps / 100, -2, Math.min(6, wacc - 1));
@@ -221,20 +229,52 @@ function runDcf({ forecastTable, wacc, terminalGrowth, shareCount, netDebt, exit
   const terminalBase = forecastTable.at(-1)?.freeCashFlow ?? 0;
   const terminalValue = (terminalBase * (1 + terminalGrowthDecimal)) / Math.max(waccDecimal - terminalGrowthDecimal, 0.01);
   const pvTerminalValue = terminalValue / Math.pow(1 + waccDecimal, forecastTable.length);
-  const enterpriseValue = discounted.reduce((sum, row) => sum + row.pvFreeCashFlow, 0) + pvTerminalValue;
+  const pvForecastCashFlows = discounted.reduce((sum, row) => sum + row.pvFreeCashFlow, 0);
+  const enterpriseValue = pvForecastCashFlows + pvTerminalValue;
   const equityValue = enterpriseValue - netDebt;
   const valuePerShare = shareCount > 0 ? equityValue / shareCount : null;
-  const exitMultipleValue = exitEbitdaMultiple > 0 ? (forecastTable.at(-1)?.ebitda ?? 0) * exitEbitdaMultiple : null;
+  const exitEnterpriseValue = exitEbitdaMultiple > 0 ? (forecastTable.at(-1)?.ebitda ?? 0) * exitEbitdaMultiple : null;
+  const pvExitEnterpriseValue = Number.isFinite(exitEnterpriseValue) ? exitEnterpriseValue / Math.pow(1 + waccDecimal, forecastTable.length) : null;
+  const enterpriseValueFromExit = Number.isFinite(pvExitEnterpriseValue) ? pvForecastCashFlows + pvExitEnterpriseValue : null;
+  const equityValueFromExit = Number.isFinite(enterpriseValueFromExit) ? enterpriseValueFromExit - netDebt : null;
+  const valuePerShareFromExit = shareCount > 0 && Number.isFinite(equityValueFromExit) ? equityValueFromExit / shareCount : null;
+  const impliedTerminalEvEbitda = Number.isFinite(forecastTable.at(-1)?.ebitda) && Math.abs(forecastTable.at(-1)?.ebitda) > 0.0001
+    ? terminalValue / forecastTable.at(-1).ebitda
+    : null;
 
   return {
     wacc,
     terminalGrowth,
     terminalValue,
     pvTerminalValue,
+    pvForecastCashFlows,
     enterpriseValue,
     equityValue,
     valuePerShare,
-    exitMultipleValue,
+    exitMultipleValue: exitEnterpriseValue,
+    terminalContributionPct: enterpriseValue !== 0 ? (pvTerminalValue / enterpriseValue) * 100 : null,
+    impliedTerminalEvEbitda,
+    methods: {
+      primary: {
+        kind: 'gordon_growth',
+        enterpriseValue,
+        equityValue,
+        valuePerShare,
+        terminalValue,
+        pvTerminalValue,
+      },
+      exitMultipleCrossCheck: Number.isFinite(exitEnterpriseValue)
+        ? {
+          kind: 'exit_multiple',
+          exitEbitdaMultiple,
+          terminalValue: exitEnterpriseValue,
+          pvTerminalValue: pvExitEnterpriseValue,
+          enterpriseValue: enterpriseValueFromExit,
+          equityValue: equityValueFromExit,
+          valuePerShare: valuePerShareFromExit,
+        }
+        : null,
+    },
     discountedCashFlows: discounted,
   };
 }
@@ -428,6 +468,22 @@ function buildPath(start, end) {
     if (YEAR_LABELS.length === 1) return start;
     const t = index / (YEAR_LABELS.length - 1);
     return start + (end - start) * t;
+  });
+}
+
+function buildWorkingCapitalPath({ startPct, targetPct, profile = 'balanced' }) {
+  const power = profile === 'negative'
+    ? 1.9
+    : profile === 'light'
+      ? 1.7
+      : profile === 'inventory_heavy'
+        ? 1.2
+        : 1.4;
+
+  return YEAR_LABELS.map((_year, index) => {
+    if (YEAR_LABELS.length === 1) return startPct;
+    const t = index / (YEAR_LABELS.length - 1);
+    return startPct + (targetPct - startPct) * Math.pow(t, power);
   });
 }
 

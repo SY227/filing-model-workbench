@@ -126,20 +126,11 @@ export async function fetchSecFiling({ ticker, formType, year, quarter }) {
   return resolveTickerToFiling({ ticker, formType, year, quarter });
 }
 
-async function fetchSecJson(url) {
-  return runSecRequest(async () => {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': buildSecUserAgent(),
-        Accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
+export async function fetchSecJsonResource(url, { cacheKey = url, ttlMs = CACHE_TTL_MS } = {}) {
+  return getValueWithCache(cacheKey, ttlMs, async () => {
+    const response = await fetchSecResource(url, {
+      Accept: 'application/json,text/plain;q=0.9,*/*;q=0.8',
     });
-
-    if (!response.ok) {
-      throw new Error(`SEC fetch failed (${response.status} ${response.statusText}). Try again shortly or use advanced manual input.`);
-    }
 
     try {
       return await response.json();
@@ -149,12 +140,68 @@ async function fetchSecJson(url) {
   });
 }
 
+export async function fetchSecTextResource(url, { cacheKey = url, ttlMs = CACHE_TTL_MS } = {}) {
+  return getValueWithCache(cacheKey, ttlMs, async () => {
+    const response = await fetchSecResource(url, {
+      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
+    });
+    return response.text();
+  });
+}
+
+export function parseSecArchiveUrl(url) {
+  if (!url) return null;
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const match = parsed.pathname.match(/\/Archives\/edgar\/data\/(\d+)\/(\d+)\/([^/]+)$/i);
+  if (!match) return null;
+  return {
+    cik: String(Number(match[1])),
+    accessionNoDashes: match[2],
+    accessionNumber: restoreAccessionDashes(match[2]),
+    primaryDocument: match[3],
+    url: parsed.toString(),
+  };
+}
+
+async function fetchSecJson(url) {
+  return fetchSecJsonResource(url, { cacheKey: url });
+}
+
+async function fetchSecResource(url, acceptHeaders) {
+  return runSecRequest(async () => {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': buildSecUserAgent(),
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Accept-Language': 'en-US,en;q=0.9',
+        ...acceptHeaders,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`SEC fetch failed (${response.status} ${response.statusText}). Try again shortly or use advanced manual input.`);
+    }
+
+    return response;
+  });
+}
+
 async function getJsonWithCache(cacheKey, load) {
+  return getValueWithCache(cacheKey, CACHE_TTL_MS, load);
+}
+
+async function getValueWithCache(cacheKey, ttlMs, load) {
   const now = Date.now();
   const cached = cache.get(cacheKey);
   if (cached && cached.expiresAt > now) return cached.value;
   const value = await load();
-  cache.set(cacheKey, { value, expiresAt: now + CACHE_TTL_MS });
+  cache.set(cacheKey, { value, expiresAt: now + ttlMs });
   return value;
 }
 
@@ -295,6 +342,12 @@ function parseIsoDate(value) {
 function extractYear(value) {
   const match = String(value || '').match(/(20\d{2})/);
   return match ? Number(match[1]) : null;
+}
+
+function restoreAccessionDashes(accessionNoDashes) {
+  const value = String(accessionNoDashes || '').replace(/\D/g, '');
+  if (value.length !== 18) return accessionNoDashes;
+  return `${value.slice(0, 10)}-${value.slice(10, 12)}-${value.slice(12)}`;
 }
 
 function buildSecUserAgent() {

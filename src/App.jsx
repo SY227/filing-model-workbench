@@ -239,10 +239,10 @@ export default function App() {
           <section className="card input-card premium-panel combined-intake-card">
             <div className="hero hero-premium combined-intake-hero">
               <div className="hero-copy-block combined-intake-copy-block">
-                <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
-                <h1>Filing Model Workbench</h1>
+                <div className="eyebrow">Agentic SEC filing-to-model workflow</div>
+                <h1>10-Q / 10-K Model Workbench</h1>
                 <p className="hero-copy">
-                  Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
+                  Enter a ticker, select 10-Q or 10-K, choose the quarter when relevant, and generate a filing-grounded model and valuation view from the selected SEC filing.
                 </p>
               </div>
             </div>
@@ -259,7 +259,6 @@ export default function App() {
               title="10-Q or 10-K"
               subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing."
               document={filing}
-              required
               yearError={yearError}
               onChange={updateFiling}
               tickerPlaceholder="AAPL"
@@ -280,7 +279,7 @@ export default function App() {
           <section className="card workflow-card premium-panel top-panel-card">
               <div className="section-header compact">
                 <div>
-                  <div className="section-kicker">Workflow status</div>
+                  <div className="section-kicker">Agentic Flow</div>
                   <h2>Processing trail</h2>
                 </div>
               {isProcessing ? <span className="live-pill">Live</span> : null}
@@ -470,6 +469,7 @@ export default function App() {
 
                     <SectionCard title="Valuation frame" kicker="2" defaultOpen accent>
                       <p className="executive-body valuation-lead">{result.valuationSummary?.summary}</p>
+                      <div className="mini-note">Primary value uses a Gordon-growth DCF. The exit EBITDA multiple is shown automatically as a terminal cross-check, with no extra user input.</div>
                       <div className="mini-note">Enterprise value and equity value are shown in {moneyDisplayUnit}. Value / share remains labeled separately as {perShareDisplayUnit}.</div>
                       <div className="valuation-grid three-up compact-spacing premium-valuation-grid">
                         <ValuationCard title="Base case" valuation={result.modelPack.scenarios.base.valuation} tone="base" />
@@ -664,6 +664,7 @@ function NormalizedMetricsCard({ metrics, compact = false }) {
     { label: 'Tax rate', value: formatPercent(metrics?.taxRatePct) },
     { label: 'Capex / revenue', value: formatPercent(metrics?.capexPctRevenue) },
     { label: 'D&A / revenue', value: formatPercent(metrics?.daPctRevenue) },
+    { label: 'Operating WC / revenue', value: formatPercent(metrics?.operatingWorkingCapitalPct) },
     { label: withUnitLabel('Diluted shares', shareCountDisplayUnit), value: formatCount(metrics?.shareCount) },
     { label: withUnitLabel('Cash', moneyDisplayUnit), value: formatMoney(metrics?.cash) },
     { label: withUnitLabel('Debt', moneyDisplayUnit), value: formatMoney(metrics?.debt) },
@@ -691,7 +692,6 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
         <div>
           <div className="document-title-row">
             <div className="document-title">{title}</div>
-            {required ? <span className="required-pill">Required</span> : <span className="optional-pill">Optional</span>}
           </div>
           <div className="document-copy">{subtitle}</div>
         </div>
@@ -824,16 +824,22 @@ function ClassificationPill({ classification = 'derived' }) {
 }
 
 function ValuationCard({ title, valuation, tone }) {
+  const exitCrossCheck = valuation?.methods?.exitMultipleCrossCheck;
   return (
     <article className={`valuation-card premium-valuation-card ${tone}`}>
       <div className="scenario-label">{title}</div>
       <div className="valuation-main">{formatPerShare(valuation.valuePerShare)}</div>
-      <div className="valuation-sub">Implied value / share</div>
+      <div className="valuation-sub">Implied value / share, Gordon-growth DCF</div>
       <div className="valuation-list compact-listing">
         <ValuationLine label={withUnitLabel('Enterprise value', moneyDisplayUnit)} value={formatMoney(valuation.enterpriseValue)} />
         <ValuationLine label={withUnitLabel('Equity value', moneyDisplayUnit)} value={formatMoney(valuation.equityValue)} />
         <ValuationLine label="WACC" value={formatPercent(valuation.wacc)} />
         <ValuationLine label="Terminal growth" value={formatPercent(valuation.terminalGrowth)} />
+        <ValuationLine label="Terminal EV in DCF" value={formatMoney(valuation.terminalValue)} />
+        <ValuationLine label="Implied terminal EV / EBITDA" value={formatMultiple(valuation.impliedTerminalEvEbitda)} />
+        {exitCrossCheck ? <ValuationLine label="Exit cross-check / share" value={formatPerShare(exitCrossCheck.valuePerShare)} /> : null}
+        {exitCrossCheck ? <ValuationLine label="Exit cross-check EV" value={formatMoney(exitCrossCheck.enterpriseValue)} /> : null}
+        {exitCrossCheck ? <ValuationLine label="Exit EBITDA multiple" value={formatMultiple(exitCrossCheck.exitEbitdaMultiple)} /> : null}
       </div>
     </article>
   );
@@ -905,6 +911,11 @@ function formatMoney(value) {
 function formatPerShare(value) {
   if (!Number.isFinite(Number(value))) return '—';
   return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
+}
+
+function formatMultiple(value) {
+  if (!Number.isFinite(Number(value))) return '—';
+  return `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 1, minimumFractionDigits: 1 })}x`;
 }
 
 function formatCount(value) {
@@ -1057,10 +1068,23 @@ function buildForecastCsv(result, projectionHeaders) {
 }
 
 function buildValuationCsv(result) {
-  const lines = [`Scenario,Enterprise value (${moneyDisplayUnit}),Equity value (${moneyDisplayUnit}),Value per share (${perShareDisplayUnit}),WACC,Terminal growth`];
+  const lines = [`Scenario,Enterprise value (${moneyDisplayUnit}),Equity value (${moneyDisplayUnit}),Value per share (${perShareDisplayUnit}),WACC,Terminal growth,Terminal EV (${moneyDisplayUnit}),Implied terminal EV / EBITDA,Exit cross-check EV (${moneyDisplayUnit}),Exit cross-check value per share (${perShareDisplayUnit}),Exit EBITDA multiple`];
   scenarioKeys.forEach((key) => {
     const valuation = result.modelPack.scenarios[key].valuation;
-    lines.push([capitalize(key), valuation.enterpriseValue, valuation.equityValue, valuation.valuePerShare, valuation.wacc, valuation.terminalGrowth].map(escapeCsv).join(','));
+    const exitCrossCheck = valuation.methods?.exitMultipleCrossCheck || {};
+    lines.push([
+      capitalize(key),
+      valuation.enterpriseValue,
+      valuation.equityValue,
+      valuation.valuePerShare,
+      valuation.wacc,
+      valuation.terminalGrowth,
+      valuation.terminalValue,
+      valuation.impliedTerminalEvEbitda,
+      exitCrossCheck.enterpriseValue,
+      exitCrossCheck.valuePerShare,
+      exitCrossCheck.exitEbitdaMultiple,
+    ].map(escapeCsv).join(','));
   });
   return lines.join('\n');
 }
