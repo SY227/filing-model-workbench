@@ -65,6 +65,15 @@ export const FILING_EXTRACTION_SCHEMA = {
 export const FILING_ANALYSIS_SCHEMA = {
   draftedBaseline: {},
   draftedBaselineMeta: DRAFTED_BASELINE_META_SCHEMA,
+  currentRunwayGrowthPct: null,
+  currentRunwayGrowthMeta: {
+    classification: 'review_required',
+    rationale: '',
+    evidence: '',
+    confidence: 'low',
+    source: '',
+    basis: '',
+  },
   whatMattersForModel: {
     summary: '',
     bullets: [],

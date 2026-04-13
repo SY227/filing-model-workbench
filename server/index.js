@@ -380,6 +380,8 @@ function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filin
   const revenueGrowthProfile = buildRevenueGrowthProfile({
     aiValues: aiDraft.revenueGrowth,
     aiMeta: aiMeta.revenueGrowth,
+    aiRunwayGrowth: filingAnalysis?.currentRunwayGrowthPct,
+    aiRunwayMeta: filingAnalysis?.currentRunwayGrowthMeta,
     deterministicExtraction,
     filingMetadata: filingExtraction?.filingMetadata,
     currentRevenue,
@@ -648,7 +650,7 @@ function chooseDeterministic(primaryValue, deterministicValue = null) {
   return Number.isFinite(primaryValue) ? primaryValue : null;
 }
 
-function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, filingMetadata, currentRevenue, operatingMarginStart }) {
+function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayMeta, deterministicExtraction, filingMetadata, currentRevenue, operatingMarginStart }) {
   const historicalMetrics = deterministicExtraction?.historicalMetrics || {};
   const filingType = deterministicExtraction?.filingMetadata?.filingType || filingMetadata?.filingType || null;
   const comparableGrowth = firstFiniteNumber(historicalMetrics.revenueComparableGrowthPct, deterministicExtraction?.normalizedMetrics?.revenueComparableGrowthPct);
@@ -750,6 +752,14 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
     yearOne = Math.max(yearOne, yearOneFloor);
   }
 
+  const normalizedAiRunway = normalizeAiRunwayGrowth(aiRunwayGrowth, aiRunwayMeta);
+  if (Number.isFinite(normalizedAiRunway.value)) {
+    yearOne = eliteGrowthProfile
+      ? (0.55 * yearOne) + (0.45 * normalizedAiRunway.value)
+      : (0.7 * yearOne) + (0.3 * normalizedAiRunway.value);
+    yearOne = clampNumber(round1(yearOne), DEFAULT_BASELINE.revenueGrowth[0], -12, eliteGrowthProfile ? 32 : 28);
+  }
+
   let matureTarget = 3.2;
   if (currentRevenue >= 100_000) matureTarget += 0.5;
   else if (currentRevenue > 0 && currentRevenue < 5_000) matureTarget -= 0.3;
@@ -776,9 +786,13 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
     Number.isFinite(priorAnnualGrowth) ? `prior-year growth ${round1(priorAnnualGrowth)}%` : null,
   ].filter(Boolean).join(', ');
 
+  const revenueGrowthSource = Number.isFinite(normalizedAiRunway.value)
+    ? 'ai_runway_blend'
+    : 'heuristic';
+
   return {
     path,
-    source: 'heuristic',
+    source: revenueGrowthSource,
     signals: {
       filingType,
       anchorGrowthPct: round1(yearOne),
@@ -787,18 +801,35 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
       priorAnnualGrowthPct: Number.isFinite(priorAnnualGrowth) ? round1(priorAnnualGrowth) : null,
       decelerationPct: Number.isFinite(deceleration) ? round1(deceleration) : null,
       trendDeltaPct: Number.isFinite(trendDelta) ? round1(trendDelta) : null,
+      bestPositiveSignalPct: Number.isFinite(bestPositiveSignal) ? round1(bestPositiveSignal) : null,
+      aiRunwayGrowthPct: Number.isFinite(normalizedAiRunway.value) ? round1(normalizedAiRunway.value) : null,
+      aiRunwayInfluence: Number.isFinite(normalizedAiRunway.value) ? (eliteGrowthProfile ? 0.45 : 0.3) : 0,
       matureTargetPct: round1(yearFive),
       qualityScore: round1(qualityScore),
     },
     meta: {
-      classification: 'derived',
-      rationale: 'FY+1 blends comparable-period, prior-annual, and LTM growth signals, then fades with scale and profitability-aware discipline rather than collapsing elite growers to a flat base case.',
-      evidence: `${signalText || 'Recent deterministic growth signals unavailable'}; forecast path ${path.join(', ')}%.`,
-      confidence: signalText ? 'medium' : 'low',
-      source: 'deterministic_heuristic',
-      basis: 'heuristic',
+      classification: Number.isFinite(normalizedAiRunway.value) ? 'proposed' : 'derived',
+      rationale: Number.isFinite(normalizedAiRunway.value)
+        ? 'FY+1 blends deterministic recent-growth signals with a conservative AI runway-growth read, while years 2 to 5 still follow the deterministic fade logic.'
+        : 'FY+1 blends comparable-period, prior-annual, and LTM growth signals, then fades with scale and profitability-aware discipline rather than collapsing elite growers to a flat base case.',
+      evidence: Number.isFinite(normalizedAiRunway.value)
+        ? `${signalText || 'Recent deterministic growth signals unavailable'}; AI runway ${round1(normalizedAiRunway.value)}% (${normalizedAiRunway.meta?.evidence || 'filing runway read'}); forecast path ${path.join(', ')}%.`
+        : `${signalText || 'Recent deterministic growth signals unavailable'}; forecast path ${path.join(', ')}%.`,
+      confidence: Number.isFinite(normalizedAiRunway.value)
+        ? normalizedAiRunway.meta?.confidence || 'medium'
+        : signalText ? 'medium' : 'low',
+      source: Number.isFinite(normalizedAiRunway.value) ? 'ai_runway_blend' : 'deterministic_heuristic',
+      basis: Number.isFinite(normalizedAiRunway.value) ? 'heuristic_plus_ai_runway' : 'heuristic',
     },
   };
+}
+
+function normalizeAiRunwayGrowth(value, meta = {}) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return { value: null, meta: null };
+  if (numeric < -15 || numeric > 40) return { value: null, meta: null };
+  if ((meta?.confidence || 'low') === 'low') return { value: null, meta: null };
+  return { value: numeric, meta };
 }
 
 function shouldUseAiRevenueGrowth(values, meta = {}) {

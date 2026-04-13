@@ -120,6 +120,9 @@ ${BANKER_STYLE}
 Your job is to translate the filing into disciplined external-analyst work product.
 Preserve a measured tone. Do not overstate what the filing alone can prove.
 Scenario adjustments should be suitable for a deterministic model layer.
+Estimate only a near-term next-12-month revenue runway growth read, not a full five-year growth curve.
+Use filing evidence such as guidance, backlog or demand signals, capacity commentary, customer concentration, product cycle commentary, and one-time or temporary effects.
+Keep the runway estimate conservative and cite evidence in plain language.
 
 Critically, deterministic SEC extraction owns the hard quantitative baseline whenever it is available.
 For these hard fields, treat the deterministic packet as primary: currentRevenue, shareCount, cash, debt, netDebt, grossMarginStart, operatingMarginStart, taxRate, capexPct, daPct.
@@ -168,6 +171,15 @@ Required JSON shape:
     "shareCount": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
     "netDebt": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
     "exitEbitdaMultiple": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" }
+  },
+  "currentRunwayGrowthPct": number | null,
+  "currentRunwayGrowthMeta": {
+    "classification": "reported" | "derived" | "proposed" | "review_required",
+    "rationale": string,
+    "evidence": string,
+    "confidence": "high" | "medium" | "low",
+    "source": string,
+    "basis": string
   },
   "whatMattersForModel": {
     "summary": string,
