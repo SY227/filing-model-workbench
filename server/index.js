@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import {
   buildModelPack,
@@ -36,7 +36,7 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, '..');
 const distPath = path.join(projectRoot, 'dist');
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT || 8787);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
@@ -57,7 +57,7 @@ const HARD_BASELINE_FIELDS = [
 app.use(cors());
 app.use(express.json({ limit: '6mb' }));
 
-app.get('/api/health', (_req, res) => {
+app.get(['/api/health', '/health'], (_req, res) => {
   res.json({
     ok: true,
     model: GEMINI_MODEL,
@@ -65,7 +65,7 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.post('/api/review-filing', async (req, res) => {
+app.post(['/api/review-filing', '/review-filing'], async (req, res) => {
   try {
     ensureApiKey();
     const filingRequest = getFilingRequest(req.body);
@@ -79,7 +79,7 @@ app.post('/api/review-filing', async (req, res) => {
   }
 });
 
-app.post('/api/process', async (req, res) => {
+app.post(['/api/process', '/process'], async (req, res) => {
   setupSseHeaders(res);
   const send = (event, payload) => {
     res.write(`event: ${event}\n`);
@@ -176,9 +176,18 @@ if (fs.existsSync(distPath)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`Filing Model Workbench server listening on http://localhost:${port}`);
-});
+if (isDirectExecution()) {
+  app.listen(port, () => {
+    console.log(`Filing Model Workbench server listening on http://localhost:${port}`);
+  });
+}
+
+export default app;
+
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  return import.meta.url === pathToFileURL(process.argv[1]).href;
+}
 
 function ensureApiKey() {
   if (!GEMINI_API_KEY || GEMINI_API_KEY === 'your_gemini_api_key_here') {
