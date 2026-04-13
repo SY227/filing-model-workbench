@@ -420,7 +420,7 @@ button {
 }
 
 .primary-controls-row-top {
-  grid-template-columns: minmax(280px, 360px) minmax(128px, 156px);
+  grid-template-columns: minmax(150px, 190px) minmax(128px, 156px);
   justify-content: start;
 }
 
@@ -443,7 +443,7 @@ button {
 }
 
 .ticker-control-group {
-  max-width: 360px;
+  max-width: 190px;
 }
 
 .quarter-control-group {
