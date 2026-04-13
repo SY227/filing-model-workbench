@@ -25,6 +25,14 @@ const workflowStepDurationHintsMs = {
   pack: 14000,
 };
 
+function resolveWorkflowTerminalState(currentWorkflow, mode) {
+  if (mode === 'success') return currentWorkflow.map((step) => ({ ...step, status: 'complete' }));
+  return currentWorkflow.map((step) => ({
+    ...step,
+    status: step.status === 'active' ? 'failed' : step.status,
+  }));
+}
+
 function createEmptyFiling() {
   return { inputMode: 'ticker', ticker: '', formType: '10-Q', quarter: 'Q1', year: '', text: '', url: '', title: '' };
 }
@@ -142,6 +150,24 @@ export default function App() {
 
   async function handleProcess() {
     if (!filingReady || isProcessing) return;
+
+    const applyTerminalState = (mode, nextError = '') => {
+      if (mode === 'error') setError(nextError || 'Processing failed.');
+      setWorkflow((current) => resolveWorkflowTerminalState(current, mode));
+      setActiveWorkflowStepProgress(mode === 'success' ? 100 : 0);
+      if (mode === 'success') {
+        setTimeout(() => {
+          setActiveWorkflowProgressVisible(false);
+          setActiveWorkflowStepKey('');
+          setActiveWorkflowStepStartedAt(0);
+        }, 800);
+        return;
+      }
+      setActiveWorkflowProgressVisible(false);
+      setActiveWorkflowStepKey('');
+      setActiveWorkflowStepStartedAt(0);
+    };
+
     setError('');
     setResult(null);
     setLastCompletedStage('');
@@ -173,30 +199,15 @@ export default function App() {
           onResult: (payload) => {
             setResult(payload);
             setSelectedScenario('base');
-            setActiveWorkflowStepProgress(100);
-            setWorkflow((current) => current.map((step) => ({ ...step, status: 'complete' })));
-            setTimeout(() => {
-              setActiveWorkflowProgressVisible(false);
-              setActiveWorkflowStepKey('');
-              setActiveWorkflowStepStartedAt(0);
-            }, 800);
+            applyTerminalState('success');
           },
           onError: (payload) => {
-            setError(payload.message || 'Processing failed.');
-            setActiveWorkflowStepProgress(0);
-            setActiveWorkflowProgressVisible(false);
-            setActiveWorkflowStepKey('');
-            setActiveWorkflowStepStartedAt(0);
-            setWorkflow((current) => current.map((step) => ({ ...step, status: step.status === 'active' ? 'pending' : step.status })));
+            applyTerminalState('error', payload.message || 'Processing failed.');
           },
         }
       );
     } catch (processError) {
-      setError(processError.message || 'Processing failed.');
-      setActiveWorkflowStepProgress(0);
-      setActiveWorkflowProgressVisible(false);
-      setActiveWorkflowStepKey('');
-      setActiveWorkflowStepStartedAt(0);
+      applyTerminalState('error', processError.message || 'Processing failed.');
     } finally {
       setIsProcessing(false);
     }
@@ -893,6 +904,7 @@ function ValuationLine({ label, value }) {
 function renderStatusLabel(status, runningDots = '.') {
   if (status === 'complete') return 'Done';
   if (status === 'active') return `Running${runningDots}`;
+  if (status === 'failed') return 'Stopped';
   return 'Queued';
 }
 
