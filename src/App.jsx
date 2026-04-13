@@ -231,16 +231,9 @@ export default function App() {
               </div>
 
               <div className="action-row">
-                <button className="secondary-button" onClick={handleReviewFiling} disabled={!filingReady || isReviewing || isProcessing}>
-                  {isReviewing ? 'Reviewing filing…' : 'Review filing'}
-                </button>
                 <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
                   {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
                 </button>
-              </div>
-
-              <div className="inline-guidance">
-                Enter ticker, keep the filing type and quarter precise, and let the system retrieve the matching SEC filing automatically. Year stays optional when you want to target a specific filing window.
               </div>
 
               {error ? <div className="error-banner">{error}</div> : null}
