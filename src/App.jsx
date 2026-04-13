@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { baselineFieldLabels, baselineFieldOrder, formatDraftedBaselineValue, horizonLabels } from './assumptions';
-import { sampleCases } from './samples';
 
 const workflowTemplate = [
   { key: 'ingest', label: 'Ingesting filing', note: 'Fetch or normalize the 10-Q or 10-K text.', status: 'pending' },
@@ -206,13 +205,6 @@ export default function App() {
     setActiveWorkflowStepProgress(0);
   }
 
-  function loadSample(sample) {
-    setFiling(sample.filing);
-    setReviewPacket(null);
-    setResult(null);
-    setError('');
-  }
-
   async function handleCopy(kind) {
     if (!result) return;
     const projectionHeaders = buildProjectionLabels(result.filingMetadata);
@@ -261,27 +253,13 @@ export default function App() {
 
             <DocumentInputCard
               title="10-Q or 10-K"
-              subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing. Advanced manual input stays available if you want to override retrieval."
+              subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing."
               document={filing}
               required
               yearError={yearError}
               onChange={updateFiling}
               tickerPlaceholder="AAPL"
-              urlPlaceholder="https://www.sec.gov/Archives/.../company-filing.htm"
-              textPlaceholder="Paste the filing text here"
             />
-
-            <div className="samples-row">
-              <div className="samples-label">Public SEC examples</div>
-              <div className="sample-chips">
-                {sampleCases.map((sample) => (
-                  <button key={sample.id} className="sample-chip" onClick={() => loadSample(sample)} disabled={isProcessing || isReviewing}>
-                    <strong>{sample.label}</strong>
-                    <span>{sample.description}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
 
             <div className="action-row">
               <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
@@ -742,7 +720,7 @@ function DraftedBaselineTable({ draftedBaseline, draftedBaselineMeta, compact = 
   );
 }
 
-function DocumentInputCard({ title, subtitle, document, onChange, required = false, yearError, tickerPlaceholder, urlPlaceholder, textPlaceholder }) {
+function DocumentInputCard({ title, subtitle, document, onChange, required = false, yearError, tickerPlaceholder }) {
   const showQuarterSelector = document.formType === '10-Q';
 
   return (
@@ -829,28 +807,6 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
         </div>
       </div>
 
-      <details className="advanced-inputs-card">
-        <summary>
-          <div>
-            <div className="section-subtitle">Advanced input</div>
-            <div className="advanced-input-title">Manual filing URL or pasted text</div>
-          </div>
-          <span className="summary-hint">Open</span>
-        </summary>
-
-        <div className="mini-note advanced-note">Use this only when you want to override ticker-based SEC retrieval.</div>
-
-        <div className="mini-switch advanced-switch">
-          <button className={document.inputMode === 'url' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'url' })} type="button">Filing URL</button>
-          <button className={document.inputMode === 'text' ? 'mode-button active' : 'mode-button'} onClick={() => onChange({ ...document, inputMode: 'text' })} type="button">Paste filing text</button>
-        </div>
-
-        {document.inputMode === 'text' ? (
-          <textarea className="document-textarea" placeholder={textPlaceholder} value={document.text || ''} onChange={(event) => onChange({ ...document, inputMode: 'text', text: event.target.value })} />
-        ) : (
-          <input className="text-input" type="url" placeholder={urlPlaceholder} value={document.url || ''} onChange={(event) => onChange({ ...document, inputMode: 'url', url: event.target.value })} />
-        )}
-      </details>
     </div>
   );
 }
