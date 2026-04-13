@@ -264,6 +264,37 @@ Deterministic SEC packet:
 ${JSON.stringify(deterministicPacket, null, 2)}`;
 }
 
+export function buildRunwayGrowthPrompt({ filingExtraction, deterministicPacket, retry = false }) {
+  return `You are estimating next-12-month revenue runway growth from a single 10-Q or 10-K.
+
+${BANKER_STYLE}
+
+This field is required.
+Return a single numeric next-12-month revenue growth estimate.
+Use filing evidence such as guidance, backlog, demand commentary, capacity or supply commentary, product cycle, and temporary distortions.
+If visibility is imperfect, still return the best conservative numeric estimate.
+Do not return null unless the filing truly provides no directional basis at all.
+Return strict JSON only. Do not wrap in markdown.
+Return only these fields: currentRunwayGrowthPct, rationale, evidence, confidence.
+Do not provide a full scenario set.
+Do not provide a five-year curve.
+${retry ? 'Retry instruction: return JSON only, return one numeric percentage, do not return null unless literally impossible, do not explain first, do not use ranges, and do not output prose outside the schema.' : ''}
+
+Required JSON shape:
+{
+  "currentRunwayGrowthPct": number | null,
+  "rationale": string,
+  "evidence": string,
+  "confidence": "high" | "medium" | "low"
+}
+
+Filing extraction JSON:
+${JSON.stringify(filingExtraction, null, 2)}
+
+Deterministic SEC packet:
+${JSON.stringify(deterministicPacket, null, 2)}`;
+}
+
 export function buildReportFormattingPrompt({ filingExtraction, filingAnalysis, modelSummary, analysisStatus }) {
   return `You are formatting a filing-grounded analysis pack for a client-ready finance workflow.
 

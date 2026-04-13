@@ -97,6 +97,13 @@ export const FILING_ANALYSIS_SCHEMA = {
   checklist: [],
 };
 
+export const RUNWAY_GROWTH_SCHEMA = {
+  currentRunwayGrowthPct: null,
+  rationale: '',
+  evidence: '',
+  confidence: 'medium',
+};
+
 export const REPORT_PACK_SCHEMA = {
   executiveSummary: {
     headline: '',

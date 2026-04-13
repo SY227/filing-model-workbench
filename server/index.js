@@ -16,6 +16,7 @@ import {
   buildFilingAnalysisPrompt,
   buildFilingExtractionPrompt,
   buildReportFormattingPrompt,
+  buildRunwayGrowthPrompt,
 } from './promptSchemas.js';
 import {
   applySchemaDefaults,
@@ -23,6 +24,7 @@ import {
   FILING_EXTRACTION_SCHEMA,
   REPORT_PACK_SCHEMA,
   DRAFTED_BASELINE_META_SCHEMA,
+  RUNWAY_GROWTH_SCHEMA,
 } from './schemas.js';
 import {
   buildPromptPacket,
@@ -245,7 +247,13 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
     FILING_ANALYSIS_SCHEMA
   );
 
-  const draftedBaseline = buildDraftedBaseline({ filingExtraction, deterministicExtraction, filingAnalysis });
+  const resolvedRunwayGrowth = await resolveAiRunwayGrowth({
+    filingAnalysis,
+    filingExtraction,
+    deterministicExtraction,
+  });
+
+  const draftedBaseline = buildDraftedBaseline({ filingExtraction, deterministicExtraction, filingAnalysis, resolvedRunwayGrowth });
   const draftedBaselineMeta = buildDraftedBaselineMeta({
     aiMeta: filingAnalysis?.draftedBaselineMeta,
     filingExtraction,
@@ -267,7 +275,10 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
     filingSource,
     deterministicExtraction,
     filingExtraction,
-    filingAnalysis,
+    filingAnalysis: {
+      ...filingAnalysis,
+      resolvedRunwayGrowth,
+    },
     draftedBaseline,
     draftedBaselineMeta,
     analysisStatus,
@@ -364,7 +375,7 @@ function buildReportedBaseSummary(filingMetadata, normalizedMetrics) {
   return parts.length ? `${subject}: ${parts.join(', ')}.` : `${subject}: deterministic hard-field extraction needs analyst review.`;
 }
 
-function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filingAnalysis }) {
+function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filingAnalysis, resolvedRunwayGrowth }) {
   const aiDraft = filingAnalysis?.draftedBaseline || {};
   const aiMeta = filingAnalysis?.draftedBaselineMeta || {};
   const metrics = filingExtraction?.reportedBase?.normalizedMetrics || {};
@@ -380,8 +391,8 @@ function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filin
   const revenueGrowthProfile = buildRevenueGrowthProfile({
     aiValues: aiDraft.revenueGrowth,
     aiMeta: aiMeta.revenueGrowth,
-    aiRunwayGrowth: filingAnalysis?.currentRunwayGrowthPct,
-    aiRunwayMeta: filingAnalysis?.currentRunwayGrowthMeta,
+    aiRunwayGrowth: resolvedRunwayGrowth?.currentRunwayGrowthPct,
+    aiRunwayMeta: resolvedRunwayGrowth,
     deterministicExtraction,
     filingMetadata: filingExtraction?.filingMetadata,
     currentRevenue,
@@ -433,6 +444,14 @@ function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filin
       revenuePriorAnnualGrowthPct: deterministicExtraction?.historicalMetrics?.revenuePriorAnnualGrowthPct ?? metrics.revenuePriorAnnualGrowthPct ?? null,
       revenueGrowthSource: revenueGrowthProfile.source,
       revenueGrowthSignals: revenueGrowthProfile.signals,
+      rawAiRunwayGrowthPct: revenueGrowthProfile.signals?.rawAiRunwayGrowthPct ?? null,
+      fallbackAiRunwayGrowthPct: revenueGrowthProfile.signals?.fallbackAiRunwayGrowthPct ?? null,
+      rawAiRunwayMeta: revenueGrowthProfile.signals?.rawAiRunwayMeta ?? null,
+      selectedAiRunwayGrowthPct: revenueGrowthProfile.signals?.selectedAiRunwayGrowthPct ?? null,
+      normalizedAiRunwayGrowthPct: revenueGrowthProfile.signals?.selectedAiRunwayGrowthPct ?? null,
+      usedAiRunwayForYearOne: Boolean(revenueGrowthProfile.signals?.usedAiRunwayForYearOne),
+      aiRunwayRejectedReason: revenueGrowthProfile.signals?.aiRunwayRejectedReason || '',
+      yearOneSource: revenueGrowthProfile.signals?.yearOneSource || revenueGrowthProfile.source,
       heuristicMeta: {
         revenueGrowth: revenueGrowthProfile.meta,
         ...softAssumptions.meta,
@@ -651,6 +670,8 @@ function chooseDeterministic(primaryValue, deterministicValue = null) {
 }
 
 function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayMeta, deterministicExtraction, filingMetadata, currentRevenue, operatingMarginStart }) {
+  const normalizedAiRunway = normalizeAiRunwayGrowth(aiRunwayGrowth, aiRunwayMeta);
+  const selectedAiRunway = Number.isFinite(normalizedAiRunway.value) ? round1(normalizedAiRunway.value) : null;
   const historicalMetrics = deterministicExtraction?.historicalMetrics || {};
   const filingType = deterministicExtraction?.filingMetadata?.filingType || filingMetadata?.filingType || null;
   const comparableGrowth = firstFiniteNumber(historicalMetrics.revenueComparableGrowthPct, deterministicExtraction?.normalizedMetrics?.revenueComparableGrowthPct);
@@ -752,7 +773,6 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayM
     yearOne = Math.max(yearOne, yearOneFloor);
   }
 
-  const normalizedAiRunway = normalizeAiRunwayGrowth(aiRunwayGrowth, aiRunwayMeta);
   if (Number.isFinite(normalizedAiRunway.value)) {
     yearOne = clampNumber(round1(normalizedAiRunway.value), DEFAULT_BASELINE.revenueGrowth[0], -12, eliteGrowthProfile ? 32 : 28);
   }
@@ -784,7 +804,7 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayM
   ].filter(Boolean).join(', ');
 
   const revenueGrowthSource = Number.isFinite(normalizedAiRunway.value)
-    ? 'ai_runway_priority'
+    ? (aiRunwayMeta?.selectedSource || 'ai_runway_priority')
     : 'heuristic';
 
   return {
@@ -799,7 +819,14 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayM
       decelerationPct: Number.isFinite(deceleration) ? round1(deceleration) : null,
       trendDeltaPct: Number.isFinite(trendDelta) ? round1(trendDelta) : null,
       bestPositiveSignalPct: Number.isFinite(bestPositiveSignal) ? round1(bestPositiveSignal) : null,
-      aiRunwayGrowthPct: Number.isFinite(normalizedAiRunway.value) ? round1(normalizedAiRunway.value) : null,
+      rawAiRunwayGrowthPct: aiRunwayMeta?.rawAiRunwayGrowthPct ?? null,
+      fallbackAiRunwayGrowthPct: aiRunwayMeta?.fallbackAiRunwayGrowthPct ?? null,
+      rawAiRunwayMeta: aiRunwayMeta?.selectedRawMeta ?? aiRunwayMeta?.rawAiRunwayMeta ?? aiRunwayMeta?.rawFallbackAiRunwayMeta ?? null,
+      selectedAiRunwayGrowthPct: selectedAiRunway,
+      normalizedAiRunwayGrowthPct: selectedAiRunway,
+      usedAiRunwayForYearOne: Number.isFinite(normalizedAiRunway.value),
+      aiRunwayRejectedReason: normalizedAiRunway.rejectedReason || '',
+      yearOneSource: aiRunwayMeta?.selectedSource || (Number.isFinite(normalizedAiRunway.value) ? 'ai_runway_priority' : 'heuristic'),
       aiRunwayInfluence: Number.isFinite(normalizedAiRunway.value) ? 1 : 0,
       matureTargetPct: round1(yearFive),
       qualityScore: round1(qualityScore),
@@ -821,10 +848,142 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, aiRunwayGrowth, aiRunwayM
   };
 }
 
+async function resolveAiRunwayGrowth({ filingAnalysis, filingExtraction, deterministicExtraction }) {
+  const primaryRawValue = filingAnalysis?.currentRunwayGrowthPct;
+  const primaryRawMeta = filingAnalysis?.currentRunwayGrowthMeta || null;
+  const primaryCoerced = coerceRunwayGrowthFromText([primaryRawValue, primaryRawMeta?.rationale, primaryRawMeta?.evidence]);
+  const primaryNormalized = normalizeAiRunwayGrowth(
+    Number.isFinite(Number(primaryRawValue)) ? primaryRawValue : primaryCoerced.value,
+    {
+      source: Number.isFinite(Number(primaryRawValue)) ? 'filing_analysis' : 'filing_analysis_coerced',
+      basis: Number.isFinite(Number(primaryRawValue)) ? 'primary_field' : 'primary_text_coercion',
+      confidence: primaryRawMeta?.confidence || 'medium',
+      evidence: primaryRawMeta?.evidence || '',
+      rationale: primaryRawMeta?.rationale || '',
+    }
+  );
+
+  const firstFallback = await requestRunwayGrowth({ filingExtraction, deterministicExtraction, retry: false });
+  let secondFallback = null;
+  let firstFallbackNormalized = normalizeAiRunwayGrowth(firstFallback?.currentRunwayGrowthPct, {
+    source: 'runway_growth_fallback',
+    basis: 'fallback_call',
+    confidence: firstFallback?.confidence || 'medium',
+    evidence: firstFallback?.evidence || '',
+    rationale: firstFallback?.rationale || '',
+  });
+
+  if (!Number.isFinite(firstFallbackNormalized.value)) {
+    secondFallback = await requestRunwayGrowth({ filingExtraction, deterministicExtraction, retry: true });
+    firstFallbackNormalized = normalizeAiRunwayGrowth(secondFallback?.currentRunwayGrowthPct, {
+      source: 'runway_growth_fallback_retry',
+      basis: 'fallback_retry_call',
+      confidence: secondFallback?.confidence || 'medium',
+      evidence: secondFallback?.evidence || '',
+      rationale: secondFallback?.rationale || '',
+    });
+  }
+
+  const fallbackPayload = secondFallback || firstFallback;
+  const fallbackCoerced = coerceRunwayGrowthFromText([
+    fallbackPayload?.currentRunwayGrowthPct,
+    fallbackPayload?.rationale,
+    fallbackPayload?.evidence,
+  ]);
+  const fallbackCoercedNormalized = normalizeAiRunwayGrowth(fallbackCoerced.value, {
+    source: 'runway_growth_fallback_coerced',
+    basis: 'fallback_text_coercion',
+    confidence: fallbackPayload?.confidence || 'medium',
+    evidence: fallbackPayload?.evidence || '',
+    rationale: fallbackPayload?.rationale || '',
+  });
+
+  const selected = [
+    { key: 'dedicated_fallback_ai', normalized: firstFallbackNormalized, payload: fallbackPayload },
+    { key: 'filing_analysis_ai', normalized: normalizeAiRunwayGrowth(primaryRawValue, { source: 'filing_analysis', basis: 'primary_field', confidence: primaryRawMeta?.confidence || 'medium', evidence: primaryRawMeta?.evidence || '', rationale: primaryRawMeta?.rationale || '' }), payload: { rationale: primaryRawMeta?.rationale || '', evidence: primaryRawMeta?.evidence || '', confidence: primaryRawMeta?.confidence || 'medium' } },
+    { key: 'dedicated_fallback_coerced', normalized: fallbackCoercedNormalized, payload: fallbackPayload },
+    { key: 'filing_analysis_coerced', normalized: primaryNormalized, payload: { rationale: primaryRawMeta?.rationale || '', evidence: primaryRawMeta?.evidence || '', confidence: primaryRawMeta?.confidence || 'medium' } },
+  ].find((entry) => Number.isFinite(entry.normalized.value));
+
+  return {
+    currentRunwayGrowthPct: selected?.normalized?.value ?? null,
+    rationale: selected?.payload?.rationale || '',
+    evidence: selected?.payload?.evidence || '',
+    confidence: selected?.payload?.confidence || 'medium',
+    classification: 'proposed',
+    source: selected?.key || 'heuristic_fallback_required',
+    selectedSource: selected?.key || 'heuristic',
+    selectedRawMeta: selected?.payload || null,
+    basis: selected?.normalized?.meta?.basis || 'no_numeric_ai_runway',
+    rawAiRunwayGrowthPct: primaryRawValue ?? null,
+    rawAiRunwayMeta: primaryRawMeta,
+    fallbackAiRunwayGrowthPct: fallbackPayload?.currentRunwayGrowthPct ?? fallbackCoerced.value ?? null,
+    rawFallbackAiRunwayMeta: fallbackPayload ? {
+      rationale: fallbackPayload?.rationale || '',
+      evidence: fallbackPayload?.evidence || '',
+      confidence: fallbackPayload?.confidence || 'medium',
+    } : null,
+    normalizedAiRunwayGrowthPct: selected?.normalized?.value ?? null,
+    usedAiRunwayForYearOne: Boolean(selected),
+    aiRunwayRejectedReason: selected
+      ? ''
+      : `Primary AI runway rejected: ${primaryNormalized.rejectedReason} Fallback AI runway rejected: ${firstFallbackNormalized.rejectedReason} Coerced fallback rejected: ${fallbackCoercedNormalized.rejectedReason}`.trim(),
+  };
+}
+
+async function requestRunwayGrowth({ filingExtraction, deterministicExtraction, retry = false }) {
+  return applySchemaDefaults(
+    await callGeminiJson(
+      buildRunwayGrowthPrompt({
+        filingExtraction: buildFilingAnalysisInput(filingExtraction),
+        deterministicPacket: buildPromptPacket(deterministicExtraction),
+        retry,
+      }),
+      retry ? 0 : 0.1,
+      { timeoutMs: GEMINI_TIMEOUT_MS, label: retry ? 'runway growth fallback retry' : 'runway growth fallback' }
+    ),
+    RUNWAY_GROWTH_SCHEMA
+  );
+}
+
+function coerceRunwayGrowthFromText(values = []) {
+  const text = values.filter((value) => value !== null && value !== undefined).map((value) => String(value)).join(' ');
+  const matches = [...text.matchAll(/(-?\d+(?:\.\d+)?)\s*%?/g)];
+  for (const match of matches) {
+    const numeric = Number(match[1]);
+    if (Number.isFinite(numeric) && numeric >= -15 && numeric <= 40) {
+      return { value: numeric, sourceText: match[0] };
+    }
+  }
+  return { value: null, sourceText: '' };
+}
+
 function normalizeAiRunwayGrowth(value, meta = {}) {
+  if (value === null || value === undefined) {
+    return {
+      value: null,
+      meta: null,
+      rejectedReason: 'AI runway growth was null or undefined.',
+    };
+  }
+  if (typeof value === 'number' && Number.isNaN(value)) {
+    return {
+      value: null,
+      meta: null,
+      rejectedReason: 'AI runway growth was NaN.',
+    };
+  }
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return { value: null, meta: null };
-  return { value: numeric, meta };
+  if (!Number.isFinite(numeric)) {
+    return {
+      value: null,
+      meta: null,
+      rejectedReason: typeof value === 'string' && value.trim() !== ''
+        ? `AI runway growth was non-numeric: ${value}`
+        : 'AI runway growth was non-numeric.',
+    };
+  }
+  return { value: numeric, meta, rejectedReason: '' };
 }
 
 function shouldUseAiRevenueGrowth(values, meta = {}) {
