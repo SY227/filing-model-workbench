@@ -106,6 +106,10 @@ export default function App() {
       : filing.text.trim().length >= 1000;
   const activeMetadata = result?.filingMetadata || reviewPacket?.filingMetadata || null;
   const projectionLabels = useMemo(() => buildProjectionLabels(activeMetadata), [activeMetadata]);
+  const reviewPeriodLabel = formatFilingPeriod(reviewPacket?.filingMetadata);
+  const resultPeriodLabel = formatFilingPeriod(result?.filingMetadata);
+  const resultFilingTypeLabel = formatMetadataValue(result?.filingMetadata?.filingType);
+  const resultFilingDateLabel = formatMetadataValue(result?.filingMetadata?.filingDate);
   const selectedScenarioModel = result?.modelPack ? result.modelPack.scenarios[selectedScenario] : null;
   const needsReview = Boolean(result && (!result.modelPack || result.analysisStatus?.state === 'needs_review'));
   const runningDots = '.'.repeat(runningDotCount);
@@ -344,7 +348,7 @@ export default function App() {
                   <div className="report-header-grid review-meta-grid">
                     <MetaPill label="Company" value={reviewPacket.filingMetadata.company || 'Needs review'} />
                     <MetaPill label="Filing type" value={reviewPacket.filingMetadata.filingType || 'Needs review'} />
-                    <MetaPill label="Period" value={reviewPacket.filingMetadata.period || 'Needs review'} />
+                    <MetaPill label="Period" value={reviewPeriodLabel} />
                     {reviewPacket.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={reviewPacket.filingMetadata.fiscalQuarter} /> : null}
                     <MetaPill label="Filing date" value={reviewPacket.filingMetadata.filingDate || 'Needs review'} />
                     <MetaPill label="Status" value={reviewPacket.analysisStatus?.state === 'needs_review' ? 'Needs review' : 'Ready'} />
@@ -371,10 +375,10 @@ export default function App() {
                 <section className="card report-hero report-slide-hero">
                   <div className="report-context-strip">
                     <MetaPill label="Company" value={result.filingMetadata.company || result.filingMetadata.title || 'Filing-grounded analysis'} />
-                    <MetaPill label="Filing type" value={result.filingMetadata.filingType || 'Needs review'} />
-                    <MetaPill label="Period" value={result.filingMetadata.period || 'Needs review'} />
+                    <MetaPill label="Filing type" value={resultFilingTypeLabel} />
+                    <MetaPill label="Period" value={resultPeriodLabel} />
                     {result.filingMetadata.fiscalQuarter ? <MetaPill label="Quarter" value={result.filingMetadata.fiscalQuarter} /> : null}
-                    <MetaPill label="Filing date" value={result.filingMetadata.filingDate || 'Needs review'} />
+                    <MetaPill label="Filing date" value={resultFilingDateLabel} />
                     <MetaPill label="Status" value={needsReview ? 'Needs review' : 'Model ready'} />
                   </div>
 
@@ -1016,6 +1020,24 @@ function extractAnchorYear(metadata) {
   const text = `${metadata?.period || ''} ${metadata?.filingDate || ''}`;
   const matches = [...text.matchAll(/(20\d{2})/g)].map((match) => Number(match[1]));
   return matches.at(-1) || null;
+}
+
+function formatMetadataValue(value) {
+  const text = String(value || '').trim();
+  return text || '—';
+}
+
+function formatFilingPeriod(metadata) {
+  if (!metadata) return '—';
+  const direct = String(metadata.period || '').trim();
+  if (direct) return direct;
+  const reportingPeriod = String(metadata.reportingPeriod || '').trim();
+  if (reportingPeriod) return reportingPeriod;
+  const fiscalQuarter = String(metadata.fiscalQuarter || '').trim();
+  const fiscalYear = String(metadata.fiscalYear || '').trim();
+  if (fiscalQuarter && fiscalYear) return `${fiscalQuarter} ${fiscalYear}`;
+  if (fiscalYear) return fiscalYear;
+  return '—';
 }
 
 function validateYearInput(year) {

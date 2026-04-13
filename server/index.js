@@ -689,15 +689,24 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
     };
   }
 
-  const anchorGrowth = filingType === '10-Q'
+  const eliteGrowthProfile = currentRevenue >= 50_000 && operatingMarginStart >= 25;
+  const primaryAnchor = filingType === '10-Q'
     ? weightedAverage([
-      { value: comparableGrowth, weight: 0.7 },
-      { value: ltmGrowth, weight: 0.3 },
+      { value: comparableGrowth, weight: 0.6 },
+      { value: ltmGrowth, weight: 0.25 },
+      { value: priorAnnualGrowth, weight: 0.15 },
     ])
     : weightedAverage([
-      { value: ltmGrowth, weight: 0.65 },
-      { value: comparableGrowth, weight: 0.35 },
+      { value: comparableGrowth, weight: eliteGrowthProfile ? 0.5 : 0.35 },
+      { value: ltmGrowth, weight: eliteGrowthProfile ? 0.3 : 0.45 },
+      { value: priorAnnualGrowth, weight: 0.2 },
     ]);
+  const anchorGrowth = firstFiniteNumber(primaryAnchor, comparableGrowth, ltmGrowth, priorAnnualGrowth, DEFAULT_BASELINE.revenueGrowth[0]);
+  const trendDelta = Number.isFinite(comparableGrowth) && Number.isFinite(priorAnnualGrowth)
+    ? comparableGrowth - priorAnnualGrowth
+    : Number.isFinite(comparableGrowth) && Number.isFinite(ltmGrowth)
+      ? comparableGrowth - ltmGrowth
+      : 0;
   const deceleration = Number.isFinite(comparableGrowth) && Number.isFinite(ltmGrowth)
     ? comparableGrowth - ltmGrowth
     : Number.isFinite(ltmGrowth) && Number.isFinite(priorAnnualGrowth)
@@ -716,8 +725,16 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
   else if (anchorGrowth < 0) qualityScore -= 0.75;
   if (deceleration >= -2) qualityScore += 0.5;
   else if (deceleration < -8) qualityScore -= 1;
+  if (trendDelta >= 0) qualityScore += 0.4;
+  else if (trendDelta < -8) qualityScore -= 0.5;
 
-  let yearOne = clampNumber(anchorGrowth, DEFAULT_BASELINE.revenueGrowth[0], -12, 28);
+  let yearOneFloor = currentRevenue >= 100_000 ? 3.5 : currentRevenue >= 50_000 ? 2.5 : 1.5;
+  if (eliteGrowthProfile && anchorGrowth >= 8) yearOneFloor = Math.max(yearOneFloor, Math.min(10, anchorGrowth * 0.45));
+  if (filingType === '10-Q' && Number.isFinite(comparableGrowth) && comparableGrowth >= 8) yearOneFloor = Math.max(yearOneFloor, Math.min(12, comparableGrowth * 0.5));
+
+  let yearOne = clampNumber(anchorGrowth, DEFAULT_BASELINE.revenueGrowth[0], -12, eliteGrowthProfile ? 32 : 28);
+  if (anchorGrowth > 0) yearOne = Math.max(yearOne, yearOneFloor);
+
   let matureTarget = 3.2;
   if (currentRevenue >= 100_000) matureTarget += 0.5;
   else if (currentRevenue > 0 && currentRevenue < 5_000) matureTarget -= 0.3;
@@ -726,15 +743,16 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
   if (yearOne >= 15) matureTarget += 0.45;
   else if (yearOne < 3) matureTarget -= 0.25;
   if (deceleration < -8) matureTarget -= 0.35;
-  matureTarget = clampNumber(matureTarget, DEFAULT_BASELINE.revenueGrowth[4], 2, 7);
+  if (eliteGrowthProfile && yearOne >= 8) matureTarget += 0.5;
+  matureTarget = clampNumber(matureTarget, DEFAULT_BASELINE.revenueGrowth[4], 2, eliteGrowthProfile ? 8 : 7);
 
-  const fadePower = qualityScore >= 3 ? 2.1 : qualityScore >= 1.5 ? 1.8 : qualityScore >= 0 ? 1.55 : 1.25;
+  const fadePower = qualityScore >= 3 ? 2.15 : qualityScore >= 1.5 ? 1.85 : qualityScore >= 0 ? 1.6 : 1.3;
   const yearFive = yearOne >= 0
-    ? clampNumber(Math.min(Math.max(matureTarget, 2), Math.max(matureTarget, yearOne - 0.8)), matureTarget, 2, 9)
+    ? clampNumber(Math.min(Math.max(matureTarget, 2), Math.max(matureTarget, yearOne - (eliteGrowthProfile ? 1.2 : 0.8))), matureTarget, 2, eliteGrowthProfile ? 10 : 9)
     : clampNumber(Math.max(1.5, matureTarget - 0.3), matureTarget, 1.5, 5.5);
 
   const rawPath = interpolatePath(yearOne, yearFive, YEAR_LABELS.length, fadePower);
-  const maxAnnualDrop = clampNumber(2.2 + Math.max(0, yearOne) / 10 + Math.max(0, -deceleration) * 0.18, 3.2, 1.5, 6.5);
+  const maxAnnualDrop = clampNumber(2.2 + Math.max(0, yearOne) / 10 + Math.max(0, -deceleration) * 0.18, eliteGrowthProfile ? 4.2 : 3.2, 1.5, eliteGrowthProfile ? 7.5 : 6.5);
   const path = smoothRevenueGrowthPath(rawPath, { maxAnnualDrop, allowMildReacceleration: yearOne < 3 }).map((value) => round1(value));
 
   const signalText = [
@@ -753,12 +771,13 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
       ltmGrowthPct: Number.isFinite(ltmGrowth) ? round1(ltmGrowth) : null,
       priorAnnualGrowthPct: Number.isFinite(priorAnnualGrowth) ? round1(priorAnnualGrowth) : null,
       decelerationPct: Number.isFinite(deceleration) ? round1(deceleration) : null,
+      trendDeltaPct: Number.isFinite(trendDelta) ? round1(trendDelta) : null,
       matureTargetPct: round1(yearFive),
       qualityScore: round1(qualityScore),
     },
     meta: {
       classification: 'derived',
-      rationale: 'FY+1 is anchored to the strongest recent reported growth signal available, then eased down over five years with a slower fade for larger, higher-quality, or less rapidly decelerating businesses.',
+      rationale: 'FY+1 blends comparable-period, prior-annual, and LTM growth signals, then fades with scale and profitability-aware discipline rather than collapsing elite growers to a flat base case.',
       evidence: `${signalText || 'Recent deterministic growth signals unavailable'}; forecast path ${path.join(', ')}%.`,
       confidence: signalText ? 'medium' : 'low',
       source: 'deterministic_heuristic',
