@@ -748,7 +748,7 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
                 value={document.year || ''}
                 onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
               />
-              {yearError ? <div className="field-help field-error">{yearError}</div> : null}
+              <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
             </div>
           </div>
 
@@ -768,6 +768,7 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
                     </button>
                   ))}
                 </div>
+                <div className="field-help">Quarter-aware retrieval is only used for 10-Q filings.</div>
               </div>
             ) : null}
 

@@ -389,11 +389,11 @@ button {
 }
 
 .primary-controls-row-bottom.with-quarter {
-  grid-template-columns: minmax(220px, 240px) minmax(168px, 188px);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.95fr);
 }
 
 .primary-controls-row-bottom.without-quarter {
-  grid-template-columns: minmax(168px, 188px);
+  grid-template-columns: minmax(240px, 0.95fr);
   justify-content: start;
 }
 
@@ -413,11 +413,6 @@ button {
 
 .filing-type-control-group {
   gap: 6px;
-  width: min(188px, 100%);
-}
-
-.quarter-control-group {
-  width: min(240px, 100%);
 }
 
 .control-label {
@@ -462,7 +457,8 @@ button {
   margin-top: 4px;
 }
 
-.filing-type-switch {
+.filing-type-switch,
+.filing-quarter-switch {
   margin: 0;
   width: 100%;
   flex-wrap: nowrap;
@@ -470,22 +466,10 @@ button {
   align-items: stretch;
 }
 
-.filing-quarter-switch {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin: 0;
-  width: 100%;
-  min-height: auto;
-}
-
 .filing-type-switch .mode-button,
 .filing-quarter-switch .mode-button {
   flex: 1 1 0;
   min-height: 40px;
-}
-
-.filing-quarter-switch .mode-button {
-  width: 100%;
 }
 
 .advanced-inputs-card {
