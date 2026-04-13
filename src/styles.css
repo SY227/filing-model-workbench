@@ -385,15 +385,15 @@ button {
 }
 
 .primary-controls-row-top {
-  grid-template-columns: minmax(0, 1.4fr) minmax(240px, 0.95fr);
+  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.72fr);
 }
 
 .primary-controls-row-bottom.with-quarter {
-  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.72fr);
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.95fr);
 }
 
 .primary-controls-row-bottom.without-quarter {
-  grid-template-columns: minmax(180px, 0.72fr);
+  grid-template-columns: minmax(240px, 0.95fr);
   justify-content: start;
 }
 
@@ -401,7 +401,7 @@ button {
   max-width: 240px;
 }
 
-.primary-controls-row-bottom.with-quarter .year-control-group {
+.year-control-group-top {
   max-width: none;
 }
 

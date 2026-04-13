@@ -737,25 +737,18 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
               />
             </div>
 
-            <div className="control-group filing-type-control-group">
-              <label className="control-label">Filing type</label>
-              <div className="mini-switch filing-type-switch">
-                {filingTypeOptions.map((option) => (
-                  <button
-                    key={option}
-                    className={document.formType === option ? 'mode-button active' : 'mode-button'}
-                    onClick={() => onChange({
-                      ...document,
-                      inputMode: 'ticker',
-                      formType: option,
-                      quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
-                    })}
-                    type="button"
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
+            <div className="control-group year-control-group year-control-group-top">
+              <label className="control-label">Year (optional)</label>
+              <input
+                className={`text-input year-input ${yearError ? 'input-error' : ''}`}
+                type="text"
+                inputMode="numeric"
+                maxLength={4}
+                placeholder="2025"
+                value={document.year || ''}
+                onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
+              />
+              <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
             </div>
           </div>
 
@@ -779,18 +772,25 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
               </div>
             ) : null}
 
-            <div className="control-group year-control-group">
-              <label className="control-label">Year (optional)</label>
-              <input
-                className={`text-input year-input ${yearError ? 'input-error' : ''}`}
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                placeholder="2025"
-                value={document.year || ''}
-                onChange={(event) => onChange({ ...document, inputMode: 'ticker', year: event.target.value.replace(/[^0-9]/g, '') })}
-              />
-              <div className={`field-help ${yearError ? 'field-error' : ''}`}>{yearError || 'Optional. Use a 4-digit year to search within that calendar year.'}</div>
+            <div className="control-group filing-type-control-group">
+              <label className="control-label">Filing type</label>
+              <div className="mini-switch filing-type-switch">
+                {filingTypeOptions.map((option) => (
+                  <button
+                    key={option}
+                    className={document.formType === option ? 'mode-button active' : 'mode-button'}
+                    onClick={() => onChange({
+                      ...document,
+                      inputMode: 'ticker',
+                      formType: option,
+                      quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
+                    })}
+                    type="button"
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
