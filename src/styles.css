@@ -787,6 +787,8 @@ button {
   color: var(--muted-soft);
   font-size: 0.82rem;
   font-weight: 700;
+  min-width: 92px;
+  text-align: right;
 }
 
 .report-context-strip {

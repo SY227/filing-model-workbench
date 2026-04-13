@@ -32,6 +32,7 @@ export default function App() {
   const [lastCompletedStage, setLastCompletedStage] = useState('');
   const [selectedScenario, setSelectedScenario] = useState('base');
   const [copyFeedback, setCopyFeedback] = useState('');
+  const [runningDotCount, setRunningDotCount] = useState(1);
 
   useEffect(() => {
     fetch('/api/health')
@@ -46,6 +47,19 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [copyFeedback]);
 
+  useEffect(() => {
+    if (!isProcessing) {
+      setRunningDotCount(1);
+      return undefined;
+    }
+
+    const timer = setInterval(() => {
+      setRunningDotCount((current) => (current % 3) + 1);
+    }, 420);
+
+    return () => clearInterval(timer);
+  }, [isProcessing]);
+
   const yearError = validateYearInput(filing.year);
   const filingReady = filing.inputMode === 'ticker'
     ? Boolean(filing.ticker?.trim()) && !yearError && (filing.formType !== '10-Q' || Boolean(filing.quarter))
@@ -55,6 +69,15 @@ export default function App() {
   const activeMetadata = result?.filingMetadata || reviewPacket?.filingMetadata || null;
   const projectionLabels = useMemo(() => buildProjectionLabels(activeMetadata), [activeMetadata]);
   const selectedScenarioModel = result ? result.modelPack.scenarios[selectedScenario] : null;
+  const runningDots = '.'.repeat(runningDotCount);
+  const workflowProgress = useMemo(() => {
+    if (result) return 100;
+    const completeCount = workflow.filter((step) => step.status === 'complete').length;
+    const activeCount = workflow.filter((step) => step.status === 'active').length;
+    if (!isProcessing && !completeCount) return 0;
+    if (!isProcessing) return Math.round((completeCount / workflow.length) * 100);
+    return Math.max(8, Math.min(95, Math.round(((completeCount + activeCount * 0.5) / workflow.length) * 100)));
+  }, [isProcessing, result, workflow]);
 
   const heroMetrics = useMemo(() => {
     if (!result) return [];
@@ -239,29 +262,33 @@ export default function App() {
           </section>
 
           <section className="card workflow-card premium-panel top-panel-card">
-            <div className="section-header compact">
-              <div>
-                <div className="section-kicker">Workflow status</div>
-                <h2>Processing trail</h2>
+              <div className="section-header compact">
+                <div>
+                  <div className="section-kicker">Workflow status</div>
+                  <h2>Processing trail</h2>
+                </div>
+              {isProcessing ? <span className="live-pill">Live {workflowProgress}%</span> : null}
               </div>
-              {isProcessing ? <span className="live-pill">Live</span> : null}
-            </div>
-            <div className="workflow-list">
-              {workflow.map((step) => (
-                <div key={step.key} className={`workflow-step ${step.status}`}>
-                  <div className="workflow-indicator" />
+              <div className="workflow-list">
+                {workflow.map((step) => (
+                  <div key={step.key} className={`workflow-step ${step.status}`}>
+                    <div className="workflow-indicator" />
                   <div>
                     <div className="workflow-label">{step.label}</div>
                     <div className="workflow-note">{step.note}</div>
                   </div>
-                  <div className="workflow-status">{renderStatusLabel(step.status)}</div>
-                </div>
-              ))}
-            </div>
-            <div className="workflow-footer">
-              {isProcessing ? `Current step: ${lastCompletedStage || 'Starting'}` : result ? 'Model pack complete' : 'Awaiting filing input'}
-            </div>
-          </section>
+                    <div className="workflow-status">{renderStatusLabel(step.status, runningDots)}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="workflow-footer">
+              {isProcessing
+                ? `Current step: ${lastCompletedStage || `Starting${runningDots}`} • ${workflowProgress}% complete`
+                : result
+                  ? 'Model pack complete'
+                  : 'Awaiting filing input'}
+              </div>
+            </section>
         </section>
 
         <section className="bottom-workspace">
@@ -894,9 +921,9 @@ function ValuationLine({ label, value }) {
   return <div className="valuation-line"><span>{label}</span><strong>{value}</strong></div>;
 }
 
-function renderStatusLabel(status) {
+function renderStatusLabel(status, runningDots = '.') {
   if (status === 'complete') return 'Done';
-  if (status === 'active') return 'Running';
+  if (status === 'active') return `Running${runningDots}`;
   return 'Queued';
 }
 
