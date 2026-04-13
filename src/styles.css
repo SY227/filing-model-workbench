@@ -420,24 +420,34 @@ button {
 }
 
 .primary-controls-row-top {
-  grid-template-columns: minmax(0, 1.4fr) minmax(180px, 0.72fr);
+  grid-template-columns: minmax(280px, 360px) minmax(128px, 156px);
+  justify-content: start;
 }
 
 .primary-controls-row-bottom.with-quarter {
-  grid-template-columns: minmax(0, 1fr) minmax(208px, 0.82fr);
+  grid-template-columns: minmax(168px, 196px) minmax(148px, 176px);
+  justify-content: start;
 }
 
 .primary-controls-row-bottom.without-quarter {
-  grid-template-columns: minmax(208px, 0.82fr);
+  grid-template-columns: minmax(168px, 196px);
   justify-content: start;
 }
 
 .year-control-group {
-  max-width: 240px;
+  max-width: 156px;
 }
 
 .year-control-group-top {
-  max-width: none;
+  max-width: 156px;
+}
+
+.ticker-control-group {
+  max-width: 360px;
+}
+
+.quarter-control-group {
+  max-width: 176px;
 }
 
 .control-group {
