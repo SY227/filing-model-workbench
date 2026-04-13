@@ -1139,25 +1139,43 @@ async function streamProcess(payload, handlers) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let sawTerminalEvent = false;
+
+  const processChunk = (chunk) => {
+    const normalizedChunk = chunk.replace(/\r\n/g, '\n').trim();
+    if (!normalizedChunk) return;
+
+    const lines = normalizedChunk.split('\n');
+    const eventLine = lines.find((line) => line.startsWith('event:'));
+    const dataLines = lines.filter((line) => line.startsWith('data:'));
+    if (!eventLine || !dataLines.length) return;
+
+    const event = eventLine.replace('event:', '').trim();
+    const payloadText = dataLines.map((line) => line.replace('data:', '').trim()).join('\n');
+    const data = JSON.parse(payloadText);
+
+    if (event === 'stage') handlers.onStage?.(data);
+    if (event === 'result') {
+      sawTerminalEvent = true;
+      handlers.onResult?.(data);
+    }
+    if (event === 'error') {
+      sawTerminalEvent = true;
+      handlers.onError?.(data);
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
+    const chunks = buffer.replace(/\r\n/g, '\n').split('\n\n');
     buffer = chunks.pop() || '';
-
-    chunks.forEach((chunk) => {
-      const lines = chunk.split('\n');
-      const eventLine = lines.find((line) => line.startsWith('event:'));
-      const dataLine = lines.find((line) => line.startsWith('data:'));
-      if (!eventLine || !dataLine) return;
-      const event = eventLine.replace('event:', '').trim();
-      const payloadText = dataLine.replace('data:', '').trim();
-      const data = JSON.parse(payloadText);
-      if (event === 'stage') handlers.onStage?.(data);
-      if (event === 'result') handlers.onResult?.(data);
-      if (event === 'error') handlers.onError?.(data);
-    });
+    chunks.forEach(processChunk);
   }
+
+  buffer += decoder.decode();
+  processChunk(buffer);
+
+  if (!sawTerminalEvent) throw new Error('Processing ended before a final result or error event was received.');
 }
