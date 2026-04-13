@@ -997,8 +997,8 @@ button {
 }
 
 .hero-metric-card.primary {
-  background: linear-gradient(180deg, #eff5fc, #e3eefb);
-  border-color: rgba(62, 114, 184, 0.18);
+  background: linear-gradient(180deg, #ffffff, #f4f8fc);
+  border-color: rgba(62, 114, 184, 0.14);
 }
 
 .hero-metric-value,
