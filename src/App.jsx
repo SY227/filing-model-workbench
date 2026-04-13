@@ -45,6 +45,7 @@ export default function App() {
   const [activeWorkflowStepKey, setActiveWorkflowStepKey] = useState('');
   const [activeWorkflowStepStartedAt, setActiveWorkflowStepStartedAt] = useState(0);
   const [activeWorkflowStepProgress, setActiveWorkflowStepProgress] = useState(0);
+  const [activeWorkflowProgressVisible, setActiveWorkflowProgressVisible] = useState(false);
 
   useEffect(() => {
     fetch('/api/health')
@@ -74,7 +75,6 @@ export default function App() {
 
   useEffect(() => {
     if (!isProcessing || !activeWorkflowStepKey || !activeWorkflowStepStartedAt) {
-      if (!isProcessing) setActiveWorkflowStepProgress(0);
       return undefined;
     }
 
@@ -149,6 +149,7 @@ export default function App() {
     setActiveWorkflowStepKey(workflowTemplate[0].key);
     setActiveWorkflowStepStartedAt(Date.now());
     setActiveWorkflowStepProgress(6);
+    setActiveWorkflowProgressVisible(true);
     setIsProcessing(true);
 
     try {
@@ -174,16 +175,28 @@ export default function App() {
             setSelectedScenario('base');
             setActiveWorkflowStepProgress(100);
             setWorkflow((current) => current.map((step) => ({ ...step, status: 'complete' })));
+            setTimeout(() => {
+              setActiveWorkflowProgressVisible(false);
+              setActiveWorkflowStepKey('');
+              setActiveWorkflowStepStartedAt(0);
+            }, 800);
           },
           onError: (payload) => {
             setError(payload.message || 'Processing failed.');
             setActiveWorkflowStepProgress(0);
+            setActiveWorkflowProgressVisible(false);
+            setActiveWorkflowStepKey('');
+            setActiveWorkflowStepStartedAt(0);
             setWorkflow((current) => current.map((step) => ({ ...step, status: step.status === 'active' ? 'pending' : step.status })));
           },
         }
       );
     } catch (processError) {
       setError(processError.message || 'Processing failed.');
+      setActiveWorkflowStepProgress(0);
+      setActiveWorkflowProgressVisible(false);
+      setActiveWorkflowStepKey('');
+      setActiveWorkflowStepStartedAt(0);
     } finally {
       setIsProcessing(false);
     }
@@ -207,6 +220,7 @@ export default function App() {
     setActiveWorkflowStepKey('');
     setActiveWorkflowStepStartedAt(0);
     setActiveWorkflowStepProgress(0);
+    setActiveWorkflowProgressVisible(false);
   }
 
   async function handleCopy(kind) {
@@ -291,7 +305,7 @@ export default function App() {
                   </div>
                     <div className="workflow-status-stack">
                       <div className="workflow-status">{renderStatusLabel(step.status, runningDots)}</div>
-                      {step.status === 'active' ? <div className="workflow-progress">{activeWorkflowStepProgress}%</div> : null}
+                      {step.status === 'active' && activeWorkflowProgressVisible ? <div className="workflow-progress">{activeWorkflowStepProgress}%</div> : null}
                     </div>
                   </div>
                 ))}
