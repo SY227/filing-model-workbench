@@ -40,6 +40,7 @@ export const app = express();
 const port = Number(process.env.PORT || 8787);
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS || 45000);
 
 const HARD_BASELINE_FIELDS = [
   'currentRevenue',
@@ -216,10 +217,11 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
   const filingExtractionAi = applySchemaDefaults(
     await callGeminiJson(
       buildFilingExtractionPrompt({
-        filing: buildSourcePacketForPrompt(filingSource, 28_000),
+        filing: buildSourcePacketForPrompt(filingSource, 24_000),
         deterministicPacket: buildPromptPacket(deterministicExtraction),
       }),
-      0.1
+      0.1,
+      { timeoutMs: GEMINI_TIMEOUT_MS, label: 'filing extraction' }
     ),
     FILING_EXTRACTION_SCHEMA
   );
@@ -234,10 +236,11 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
   const filingAnalysis = applySchemaDefaults(
     await callGeminiJson(
       buildFilingAnalysisPrompt({
-        filingExtraction,
+        filingExtraction: buildFilingAnalysisInput(filingExtraction),
         deterministicPacket: buildPromptPacket(deterministicExtraction),
       }),
-      0.18
+      0.18,
+      { timeoutMs: GEMINI_TIMEOUT_MS, label: 'filing analysis' }
     ),
     FILING_ANALYSIS_SCHEMA
   );
@@ -997,33 +1000,66 @@ function logBaselineDecision({ draftedBaseline, draftedBaselineMeta, analysisSta
   }));
 }
 
-async function callGeminiJson(prompt, temperature = 0.2) {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature,
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
+function buildFilingAnalysisInput(filingExtraction) {
+  return {
+    filingMetadata: filingExtraction?.filingMetadata || null,
+    businessOverview: filingExtraction?.businessOverview || null,
+    reportedBase: {
+      summary: filingExtraction?.reportedBase?.summary || '',
+      normalizedMetrics: filingExtraction?.reportedBase?.normalizedMetrics || {},
+      reportedFacts: (filingExtraction?.reportedBase?.reportedFacts || []).slice(0, 12),
+    },
+    derivedMetrics: (filingExtraction?.derivedMetrics || []).slice(0, 8),
+    keyTakeaways: (filingExtraction?.keyTakeaways || []).slice(0, 10),
+    modelDrivers: (filingExtraction?.modelDrivers || []).slice(0, 10),
+    guidanceReferences: (filingExtraction?.guidanceReferences || []).slice(0, 6),
+    risksAndWatchItems: (filingExtraction?.risksAndWatchItems || []).slice(0, 8),
+    reviewFlags: (filingExtraction?.reviewFlags || []).slice(0, 8),
+    missingBaseInputs: filingExtraction?.missingBaseInputs || [],
+  };
+}
 
-  const data = await response.json();
-  if (!response.ok) {
-    const message = data?.error?.message || 'Gemini request failed.';
-    throw new Error(message);
-  }
-
-  const text = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('')?.trim();
-  if (!text) throw new Error('Gemini returned an empty response.');
+async function callGeminiJson(prompt, temperature = 0.2, options = {}) {
+  const { timeoutMs = GEMINI_TIMEOUT_MS, label = 'Gemini request' } = options;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('Gemini returned invalid JSON.');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      const message = data?.error?.message || 'Gemini request failed.';
+      throw new Error(message);
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('')?.trim();
+    if (!text) throw new Error('Gemini returned an empty response.');
+
+    try {
+      return JSON.parse(text);
+    } catch {
+      const match = text.match(/\{[\s\S]*\}/);
+      if (match) return JSON.parse(match[0]);
+      throw new Error('Gemini returned invalid JSON.');
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`${label} timed out after ${Math.round(timeoutMs / 1000)}s.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }

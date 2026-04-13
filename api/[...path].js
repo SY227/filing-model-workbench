@@ -1,6 +1,6 @@
 export const config = {
   runtime: 'nodejs',
-  maxDuration: 60,
+  maxDuration: 120,
 };
 
 import app from '../server/index.js';
