@@ -289,16 +289,11 @@ export default function App() {
                   <div className="section-kicker">Model-first output</div>
                   <h2>Generate a model and valuation view from the latest SEC filing</h2>
                   <p>
-                    Enter a ticker, choose 10-Q or 10-K, and add the quarter for 10-Q work so the system can retrieve the right SEC filing before building the model pack.
+                    Once you run the analysis, the app will retrieve the filing, build the model, and surface the key valuation outputs in a client-ready layout.
                   </p>
-                  <div className="empty-grid model-first-grid">
-                    <div className="empty-chip">Model headline summary</div>
-                    <div className="empty-chip">Scenario cases</div>
-                    <div className="empty-chip">Valuation range</div>
-                    <div className="empty-chip">EV sensitivity</div>
-                    <div className="empty-chip">Drafted assumptions</div>
-                    <div className="empty-chip">Filing takeaways</div>
-                  </div>
+                  <p>
+                    Expect a concise model-first pack with scenario views, valuation framing, and filing-grounded assumptions once processing completes.
+                  </p>
                 </section>
               )
             ) : (
