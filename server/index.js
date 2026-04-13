@@ -655,6 +655,10 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
   const ltmGrowth = firstFiniteNumber(historicalMetrics.revenueHistoricalGrowthPct, deterministicExtraction?.normalizedMetrics?.revenueHistoricalGrowthPct);
   const priorAnnualGrowth = firstFiniteNumber(historicalMetrics.revenuePriorAnnualGrowthPct, deterministicExtraction?.normalizedMetrics?.revenuePriorAnnualGrowthPct);
   const hasDeterministicSignal = [comparableGrowth, ltmGrowth, priorAnnualGrowth].some((value) => Number.isFinite(value));
+  const positiveSignals = [comparableGrowth, ltmGrowth, priorAnnualGrowth].filter(
+    (value) => Number.isFinite(value) && value > 0
+  );
+  const bestPositiveSignal = positiveSignals.length ? Math.max(...positiveSignals) : null;
 
   if (!hasDeterministicSignal && shouldUseAiRevenueGrowth(aiValues, aiMeta)) {
     const path = aiValues.map((value) => round1(Number(value)));
@@ -729,11 +733,22 @@ function buildRevenueGrowthProfile({ aiValues, aiMeta, deterministicExtraction, 
   else if (trendDelta < -8) qualityScore -= 0.5;
 
   let yearOneFloor = currentRevenue >= 100_000 ? 3.5 : currentRevenue >= 50_000 ? 2.5 : 1.5;
-  if (eliteGrowthProfile && anchorGrowth >= 8) yearOneFloor = Math.max(yearOneFloor, Math.min(10, anchorGrowth * 0.45));
-  if (filingType === '10-Q' && Number.isFinite(comparableGrowth) && comparableGrowth >= 8) yearOneFloor = Math.max(yearOneFloor, Math.min(12, comparableGrowth * 0.5));
+
+  if (eliteGrowthProfile && Number.isFinite(bestPositiveSignal) && bestPositiveSignal >= 8) {
+    yearOneFloor = Math.max(yearOneFloor, Math.max(3.5, Math.min(12, bestPositiveSignal * 0.35)));
+  }
+
+  if (filingType === '10-Q' && Number.isFinite(comparableGrowth) && comparableGrowth >= 8) {
+    yearOneFloor = Math.max(yearOneFloor, Math.min(12, comparableGrowth * 0.5));
+  }
 
   let yearOne = clampNumber(anchorGrowth, DEFAULT_BASELINE.revenueGrowth[0], -12, eliteGrowthProfile ? 32 : 28);
-  if (anchorGrowth > 0) yearOne = Math.max(yearOne, yearOneFloor);
+
+  if (eliteGrowthProfile && Number.isFinite(bestPositiveSignal) && bestPositiveSignal >= 8) {
+    yearOne = Math.max(yearOne, yearOneFloor);
+  } else if (anchorGrowth > 0) {
+    yearOne = Math.max(yearOne, yearOneFloor);
+  }
 
   let matureTarget = 3.2;
   if (currentRevenue >= 100_000) matureTarget += 0.5;

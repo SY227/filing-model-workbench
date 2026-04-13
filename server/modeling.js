@@ -126,7 +126,7 @@ function buildScenarioModel(label, baseline, adjustment) {
     (value, index) => clamp(value + adjustment.grossMarginDeltaBps[index] / 100, -20, 95)
   );
   const operatingMarginPath = buildPath(baseline.operatingMarginStart, baseline.operatingMarginEnd).map(
-    (value, index) => clamp(value + adjustment.operatingMarginDeltaBps[index] / 100, -40, 60)
+    (value, index) => clamp(value + adjustment.operatingMarginDeltaBps[index] / 100, -40, 75)
   );
   const revenueGrowth = baseline.revenueGrowth.map((value, index) => clamp(value + adjustment.revenueGrowthDeltaPpts[index], -50, 60));
   const capexPctPath = YEAR_LABELS.map((_year, index) => clamp(baseline.capexPct + adjustment.capexPctDeltaBps[index] / 100, 0, 25));
