@@ -1,5 +1,5 @@
 import * as cheerio from 'cheerio';
-import { fetchSecFiling } from './secLookup.js';
+import { fetchSecFiling, fetchSecResource } from './secLookup.js';
 
 const MAX_TEXT_PREVIEW = 3_000;
 
@@ -164,9 +164,11 @@ async function fetchSourceFromUrl(url, { kind, label, titleOverride }) {
     throw new Error(`That ${label.toLowerCase()} URL does not look valid.`);
   }
 
-  const response = await fetch(parsed.toString(), {
-    headers: buildRequestHeaders(parsed),
-  });
+  const response = isSecHost(parsed.hostname)
+    ? await fetchSecResource(parsed.toString(), buildRequestHeaders())
+    : await fetch(parsed.toString(), {
+      headers: buildRequestHeaders(parsed),
+    });
 
   if (!response.ok) {
     throw new Error(`Could not fetch the ${label.toLowerCase()} page (${response.status} ${response.statusText}).`);
@@ -398,23 +400,18 @@ function isLikelySectionHeading(line) {
 }
 
 function buildRequestHeaders(parsedUrl) {
-  if (isSecHost(parsedUrl.hostname)) {
-    return {
-      'User-Agent': buildSecUserAgent(),
-      Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Accept-Language': 'en-US,en;q=0.9',
-    };
+  const defaultHeaders = {
+    Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
+  };
+
+  if (!parsedUrl || isSecHost(parsedUrl.hostname)) {
+    return defaultHeaders;
   }
 
   return {
-    Accept: 'text/html,application/xhtml+xml,application/xml,text/plain;q=0.9,*/*;q=0.8',
+    ...defaultHeaders,
     'User-Agent': 'FilingModelWorkbench/1.0',
   };
-}
-
-function buildSecUserAgent() {
-  return process.env.SEC_USER_AGENT || 'Filing Model Workbench/1.0 (contact: research@localhost)';
 }
 
 function isSecHost(hostname = '') {

@@ -2,7 +2,12 @@ const SEC_TICKER_URL = 'https://www.sec.gov/files/company_tickers.json';
 const SEC_SUBMISSIONS_BASE = 'https://data.sec.gov/submissions';
 const SEC_ARCHIVES_BASE = 'https://www.sec.gov/Archives/edgar/data';
 const CACHE_TTL_MS = 10 * 60 * 1000;
-const SEC_MIN_INTERVAL_MS = Number(process.env.SEC_MIN_INTERVAL_MS || 250);
+const SEC_USER_AGENT = 'Filing Model Workbench mark.jarvis.iv@gmail.com';
+const SEC_MIN_INTERVAL_MS = Number(process.env.SEC_MIN_INTERVAL_MS || 750);
+const SEC_MAX_RETRIES = Number(process.env.SEC_MAX_RETRIES || 2);
+const SEC_RETRY_BASE_DELAY_MS = Number(process.env.SEC_RETRY_BASE_DELAY_MS || 1200);
+const SEC_RETRY_MAX_DELAY_MS = Number(process.env.SEC_RETRY_MAX_DELAY_MS || 4000);
+const SEC_RETRYABLE_STATUSES = new Set([403, 429, 500, 502, 503, 504]);
 
 const cache = new Map();
 let secRequestChain = Promise.resolve();
@@ -173,22 +178,41 @@ async function fetchSecJson(url) {
   return fetchSecJsonResource(url, { cacheKey: url });
 }
 
-async function fetchSecResource(url, acceptHeaders) {
+export async function fetchSecResource(url, acceptHeaders = {}) {
   return runSecRequest(async () => {
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': buildSecUserAgent(),
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Accept-Language': 'en-US,en;q=0.9',
-        ...acceptHeaders,
-      },
-    });
+    let lastError = null;
 
-    if (!response.ok) {
-      throw new Error(`SEC fetch failed (${response.status} ${response.statusText}). Try again shortly or use advanced manual input.`);
+    for (let attempt = 0; attempt <= SEC_MAX_RETRIES; attempt += 1) {
+      await waitForSecRequestSlot();
+
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': buildSecUserAgent(),
+          'Accept-Encoding': 'gzip, deflate',
+          Accept: '*/*',
+          ...acceptHeaders,
+        },
+      });
+
+      if (response.ok) {
+        return response;
+      }
+
+      const isRetryable = SEC_RETRYABLE_STATUSES.has(response.status);
+      const message = `SEC fetch failed (${response.status} ${response.statusText}). Try again shortly or use advanced manual input.`;
+      lastError = new Error(message);
+
+      if (!isRetryable || attempt >= SEC_MAX_RETRIES) {
+        response.body?.cancel?.();
+        throw lastError;
+      }
+
+      const retryAfterMs = getRetryAfterMs(response.headers.get('retry-after'));
+      response.body?.cancel?.();
+      await wait(resolveSecRetryDelay(attempt, retryAfterMs));
     }
 
-    return response;
+    throw lastError || new Error('SEC fetch failed. Try again shortly or use advanced manual input.');
   });
 }
 
@@ -206,18 +230,40 @@ async function getValueWithCache(cacheKey, ttlMs, load) {
 }
 
 function runSecRequest(task) {
-  const next = secRequestChain.then(async () => {
-    const elapsed = Date.now() - lastSecRequestAt;
-    if (elapsed < SEC_MIN_INTERVAL_MS) {
-      await wait(SEC_MIN_INTERVAL_MS - elapsed);
-    }
-    const result = await task();
-    lastSecRequestAt = Date.now();
-    return result;
-  });
+  const next = secRequestChain.then(task);
 
   secRequestChain = next.catch(() => undefined);
   return next;
+}
+
+async function waitForSecRequestSlot() {
+  const elapsed = Date.now() - lastSecRequestAt;
+  if (elapsed < SEC_MIN_INTERVAL_MS) {
+    await wait(SEC_MIN_INTERVAL_MS - elapsed);
+  }
+  lastSecRequestAt = Date.now();
+}
+
+function resolveSecRetryDelay(attempt, retryAfterMs) {
+  if (Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
+    return Math.min(Math.max(retryAfterMs, SEC_RETRY_BASE_DELAY_MS), SEC_RETRY_MAX_DELAY_MS);
+  }
+
+  const exponentialDelay = SEC_RETRY_BASE_DELAY_MS * (attempt + 1);
+  return Math.min(exponentialDelay, SEC_RETRY_MAX_DELAY_MS);
+}
+
+function getRetryAfterMs(retryAfterHeader) {
+  if (!retryAfterHeader) return null;
+
+  const seconds = Number(retryAfterHeader);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const retryAt = Date.parse(retryAfterHeader);
+  if (Number.isNaN(retryAt)) return null;
+  return Math.max(0, retryAt - Date.now());
 }
 
 function wait(ms) {
@@ -350,6 +396,6 @@ function restoreAccessionDashes(accessionNoDashes) {
   return `${value.slice(0, 10)}-${value.slice(10, 12)}-${value.slice(12)}`;
 }
 
-function buildSecUserAgent() {
-  return process.env.SEC_USER_AGENT || 'Filing Model Workbench/1.0 (contact: research@localhost)';
+export function buildSecUserAgent() {
+  return SEC_USER_AGENT;
 }
