@@ -411,6 +411,10 @@ button {
   align-content: start;
 }
 
+.filing-type-control-group {
+  gap: 6px;
+}
+
 .control-label {
   font-size: 0.78rem;
   font-weight: 700;
