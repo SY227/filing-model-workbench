@@ -185,87 +185,86 @@ export default function App() {
   return (
     <div className="app-shell">
       <main className="page">
-        <section className="hero hero-premium card">
-          <div className="hero-copy-block">
-            <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
-            <h1>Filing Model Workbench</h1>
-            <p className="hero-copy">
-              Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
-            </p>
-          </div>
-        </section>
+        <section className="top-workspace-grid">
+          <section className="hero hero-premium card title-card premium-panel">
+            <div className="hero-copy-block title-card-copy-block">
+              <div className="eyebrow">Ticker-first model output from a 10-Q or 10-K</div>
+              <h1>Filing Model Workbench</h1>
+              <p className="hero-copy">
+                Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
+              </p>
+            </div>
+          </section>
 
-        <section className="workspace-grid">
-          <div className="left-column">
-            <section className="card input-card premium-panel">
-              <div className="section-header">
-                <div>
-                  <div className="section-kicker">Step 1</div>
-                  <h2>Load a filing</h2>
-                </div>
-                <button className="ghost-button" onClick={handleReset} disabled={isProcessing || isReviewing}>Reset</button>
+          <section className="card input-card premium-panel top-panel-card">
+            <div className="section-header">
+              <div>
+                <div className="section-kicker">Step 1</div>
+                <h2>Load a filing</h2>
               </div>
+              <button className="ghost-button" onClick={handleReset} disabled={isProcessing || isReviewing}>Reset</button>
+            </div>
 
-              <DocumentInputCard
-                title="10-Q or 10-K"
-                subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing. Advanced manual input stays available if you want to override retrieval."
-                document={filing}
-                required
-                yearError={yearError}
-                onChange={updateFiling}
-                tickerPlaceholder="AAPL"
-                urlPlaceholder="https://www.sec.gov/Archives/.../company-filing.htm"
-                textPlaceholder="Paste the filing text here"
-              />
+            <DocumentInputCard
+              title="10-Q or 10-K"
+              subtitle="Enter a ticker, choose 10-Q or 10-K, add quarter selection when relevant, and generate a model and valuation view from a deterministically retrieved SEC filing. Advanced manual input stays available if you want to override retrieval."
+              document={filing}
+              required
+              yearError={yearError}
+              onChange={updateFiling}
+              tickerPlaceholder="AAPL"
+              urlPlaceholder="https://www.sec.gov/Archives/.../company-filing.htm"
+              textPlaceholder="Paste the filing text here"
+            />
 
-              <div className="samples-row">
-                <div className="samples-label">Public SEC examples</div>
-                <div className="sample-chips">
-                  {sampleCases.map((sample) => (
-                    <button key={sample.id} className="sample-chip" onClick={() => loadSample(sample)} disabled={isProcessing || isReviewing}>
-                      <strong>{sample.label}</strong>
-                      <span>{sample.description}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="action-row">
-                <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
-                  {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
-                </button>
-              </div>
-
-              {error ? <div className="error-banner">{error}</div> : null}
-            </section>
-
-            <section className="card workflow-card premium-panel">
-              <div className="section-header compact">
-                <div>
-                  <div className="section-kicker">Workflow status</div>
-                  <h2>Processing trail</h2>
-                </div>
-                {isProcessing ? <span className="live-pill">Live</span> : null}
-              </div>
-              <div className="workflow-list">
-                {workflow.map((step) => (
-                  <div key={step.key} className={`workflow-step ${step.status}`}>
-                    <div className="workflow-indicator" />
-                    <div>
-                      <div className="workflow-label">{step.label}</div>
-                      <div className="workflow-note">{step.note}</div>
-                    </div>
-                    <div className="workflow-status">{renderStatusLabel(step.status)}</div>
-                  </div>
+            <div className="samples-row">
+              <div className="samples-label">Public SEC examples</div>
+              <div className="sample-chips">
+                {sampleCases.map((sample) => (
+                  <button key={sample.id} className="sample-chip" onClick={() => loadSample(sample)} disabled={isProcessing || isReviewing}>
+                    <strong>{sample.label}</strong>
+                    <span>{sample.description}</span>
+                  </button>
                 ))}
               </div>
-              <div className="workflow-footer">
-                {isProcessing ? `Current step: ${lastCompletedStage || 'Starting'}` : result ? 'Model pack complete' : 'Awaiting filing input'}
-              </div>
-            </section>
-          </div>
+            </div>
 
-          <div className="right-column">
+            <div className="action-row">
+              <button className="primary-button" onClick={handleProcess} disabled={!filingReady || isProcessing}>
+                {isProcessing ? 'Building model pack…' : 'Generate analysis pack'}
+              </button>
+            </div>
+
+            {error ? <div className="error-banner">{error}</div> : null}
+          </section>
+
+          <section className="card workflow-card premium-panel top-panel-card">
+            <div className="section-header compact">
+              <div>
+                <div className="section-kicker">Workflow status</div>
+                <h2>Processing trail</h2>
+              </div>
+              {isProcessing ? <span className="live-pill">Live</span> : null}
+            </div>
+            <div className="workflow-list">
+              {workflow.map((step) => (
+                <div key={step.key} className={`workflow-step ${step.status}`}>
+                  <div className="workflow-indicator" />
+                  <div>
+                    <div className="workflow-label">{step.label}</div>
+                    <div className="workflow-note">{step.note}</div>
+                  </div>
+                  <div className="workflow-status">{renderStatusLabel(step.status)}</div>
+                </div>
+              ))}
+            </div>
+            <div className="workflow-footer">
+              {isProcessing ? `Current step: ${lastCompletedStage || 'Starting'}` : result ? 'Model pack complete' : 'Awaiting filing input'}
+            </div>
+          </section>
+        </section>
+
+        <section className="bottom-workspace">
             {!result ? (
               reviewPacket ? (
                 <section className="card review-card premium-panel">
@@ -646,7 +645,6 @@ export default function App() {
                 </SectionCard>
               </>
             )}
-          </div>
         </section>
       </main>
     </div>

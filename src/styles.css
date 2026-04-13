@@ -105,7 +105,7 @@ button {
   justify-content: space-between;
   gap: 34px;
   padding: 34px 36px;
-  margin-bottom: 24px;
+  margin-bottom: 0;
 }
 
 .hero-premium {
@@ -177,6 +177,39 @@ button {
   margin: 14px 0 0;
   max-width: 780px;
   font-size: 1.04rem;
+}
+
+.top-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.88fr) minmax(480px, 1.3fr) minmax(280px, 0.92fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.bottom-workspace {
+  display: grid;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.top-panel-card,
+.title-card {
+  min-height: 100%;
+}
+
+.title-card {
+  padding: 26px;
+  display: flex;
+  align-items: flex-start;
+}
+
+.title-card.hero-premium {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(246, 249, 253, 0.98));
+  border-color: var(--line);
+}
+
+.title-card-copy-block {
+  max-width: none;
 }
 
 .hero-meta {
@@ -1067,6 +1100,7 @@ button {
 }
 
 @media (max-width: 1320px) {
+  .top-workspace-grid,
   .workspace-grid,
   .hero,
   .summary-stats-grid,
@@ -1125,6 +1159,7 @@ button {
   .hero-metrics-grid,
   .report-context-strip,
   .scenario-metric-grid,
+  .top-workspace-grid,
   .primary-controls-row-top,
   .primary-controls-row-bottom.with-quarter,
   .primary-controls-row-bottom.without-quarter {
