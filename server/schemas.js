@@ -70,7 +70,7 @@ export const FILING_ANALYSIS_SCHEMA = {
     classification: 'review_required',
     rationale: '',
     evidence: '',
-    confidence: 'low',
+    confidence: 'medium',
     source: '',
     basis: '',
   },

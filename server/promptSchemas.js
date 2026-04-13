@@ -121,6 +121,7 @@ Your job is to translate the filing into disciplined external-analyst work produ
 Preserve a measured tone. Do not overstate what the filing alone can prove.
 Scenario adjustments should be suitable for a deterministic model layer.
 Estimate only a near-term next-12-month revenue runway growth read, not a full five-year growth curve.
+This field is important. Return a numeric currentRunwayGrowthPct when the filing supports a directional next-12-month revenue view, and do not leave it null when the filing gives enough evidence to form a conservative runway estimate.
 Use filing evidence such as guidance, backlog or demand signals, capacity commentary, customer concentration, product cycle commentary, and one-time or temporary effects.
 Keep the runway estimate conservative and cite evidence in plain language.
 
