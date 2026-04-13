@@ -753,15 +753,20 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
           </div>
 
           <div className={`primary-controls-row primary-controls-row-bottom ${showQuarterSelector ? 'with-quarter' : 'without-quarter'}`}>
-            {showQuarterSelector ? (
-              <div className="control-group quarter-control-group">
-                <label className="control-label">Quarter</label>
-                <div className="mini-switch filing-quarter-switch">
-                  {quarterOptions.map((option) => (
+            <div className="bottom-controls-stack">
+              <div className="control-group filing-type-control-group">
+                <label className="control-label">Filing type</label>
+                <div className="mini-switch filing-type-switch">
+                  {filingTypeOptions.map((option) => (
                     <button
                       key={option}
-                      className={document.quarter === option ? 'mode-button active' : 'mode-button'}
-                      onClick={() => onChange({ ...document, inputMode: 'ticker', quarter: option })}
+                      className={document.formType === option ? 'mode-button active' : 'mode-button'}
+                      onClick={() => onChange({
+                        ...document,
+                        inputMode: 'ticker',
+                        formType: option,
+                        quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
+                      })}
                       type="button"
                     >
                       {option}
@@ -769,27 +774,24 @@ function DocumentInputCard({ title, subtitle, document, onChange, required = fal
                   ))}
                 </div>
               </div>
-            ) : null}
 
-            <div className="control-group filing-type-control-group">
-              <label className="control-label">Filing type</label>
-              <div className="mini-switch filing-type-switch">
-                {filingTypeOptions.map((option) => (
-                  <button
-                    key={option}
-                    className={document.formType === option ? 'mode-button active' : 'mode-button'}
-                    onClick={() => onChange({
-                      ...document,
-                      inputMode: 'ticker',
-                      formType: option,
-                      quarter: option === '10-Q' ? document.quarter || 'Q1' : '',
-                    })}
-                    type="button"
-                  >
-                    {option}
-                  </button>
-                ))}
-              </div>
+              {showQuarterSelector ? (
+                <div className="control-group quarter-control-group">
+                  <label className="control-label">Quarter</label>
+                  <div className="mini-switch filing-quarter-switch">
+                    {quarterOptions.map((option) => (
+                      <button
+                        key={option}
+                        className={document.quarter === option ? 'mode-button active' : 'mode-button'}
+                        onClick={() => onChange({ ...document, inputMode: 'ticker', quarter: option })}
+                        type="button"
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
