@@ -193,13 +193,6 @@ export default function App() {
               Enter a ticker, choose the filing type, target the quarter when you are working off a 10-Q, and generate a model and valuation view from a deterministically retrieved SEC filing.
             </p>
           </div>
-          <div className="hero-meta">
-            <StatusPill configured={status.configured} model={status.model} />
-            <div className="hero-stats">
-              <StatTile label="Primary source" value="Public filing" />
-              <StatTile label="Core output" value="Instant model + valuation view" />
-            </div>
-          </div>
         </section>
 
         <section className="workspace-grid">
