@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { baselineFieldLabels, baselineFieldOrder, formatDraftedBaselineValue, horizonLabels } from './assumptions';
+import { sampleCases } from './samples';
 
 const workflowTemplate = [
   { key: 'ingest', label: 'Ingesting filing', note: 'Fetch or normalize the 10-Q or 10-K text.', status: 'pending' },
@@ -151,6 +152,13 @@ export default function App() {
     setSelectedScenario('base');
   }
 
+  function loadSample(sample) {
+    setFiling(sample.filing);
+    setReviewPacket(null);
+    setResult(null);
+    setError('');
+  }
+
   async function handleCopy(kind) {
     if (!result) return;
     const projectionHeaders = buildProjectionLabels(result.filingMetadata);
@@ -216,6 +224,18 @@ export default function App() {
                 urlPlaceholder="https://www.sec.gov/Archives/.../company-filing.htm"
                 textPlaceholder="Paste the filing text here"
               />
+
+              <div className="samples-row">
+                <div className="samples-label">Public SEC examples</div>
+                <div className="sample-chips">
+                  {sampleCases.map((sample) => (
+                    <button key={sample.id} className="sample-chip" onClick={() => loadSample(sample)} disabled={isProcessing || isReviewing}>
+                      <strong>{sample.label}</strong>
+                      <span>{sample.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <div className="action-row">
                 <button className="secondary-button" onClick={handleReviewFiling} disabled={!filingReady || isReviewing || isProcessing}>
