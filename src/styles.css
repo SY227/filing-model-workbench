@@ -389,11 +389,11 @@ button {
 }
 
 .primary-controls-row-bottom.with-quarter {
-  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.95fr);
+  grid-template-columns: minmax(0, 1fr) minmax(208px, 0.82fr);
 }
 
 .primary-controls-row-bottom.without-quarter {
-  grid-template-columns: minmax(240px, 0.95fr);
+  grid-template-columns: minmax(208px, 0.82fr);
   justify-content: start;
 }
 
@@ -413,6 +413,7 @@ button {
 
 .filing-type-control-group {
   gap: 6px;
+  max-width: 208px;
 }
 
 .control-label {
