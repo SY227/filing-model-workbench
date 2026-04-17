@@ -111,6 +111,34 @@ const HARD_FIELD_ORDER = [
   'daPct',
 ];
 
+const ASSET_MANAGER_TABLE_ROW_PATTERNS = {
+  aum: [/^assets? under management$/i, /^fee[- ]paying assets? under management$/i, /^fee[- ]earning assets? under management$/i, /^AUM$/i],
+  feeRelatedEarnings: [/^fee[- ]related earnings$/i, /^FRE$/i],
+  distributableEarnings: [/^distributable earnings$/i, /^distributable EPS$/i, /^distributable earnings, after tax$/i],
+  managementFees: [/^management fees?$/i, /^advisory fees?$/i, /^base management fees?$/i],
+  performanceIncome: [/^incentive fees?$/i, /^performance revenues?$/i, /^carried interest$/i, /^realized performance income$/i],
+  bookValue: [/^total stockholders'? equity$/i, /^total shareholders'? equity$/i, /^book value$/i, /^total equity$/i],
+  balanceSheetInvestments: [/^investments$/i, /^balance sheet investments$/i, /^principal investments$/i],
+  shareCount: [/^weighted average diluted shares$/i, /^diluted shares$/i, /^shares outstanding$/i],
+  cash: [/^cash and cash equivalents$/i],
+  debt: [/^debt$/i, /^long.?term debt$/i, /^borrowings$/i],
+};
+
+const ASSET_MANAGER_TEXT_PATTERNS = {
+  aum: [/assets? under management[^\n]{0,120}/ig, /fee[- ]paying assets? under management[^\n]{0,120}/ig, /fee[- ]earning assets? under management[^\n]{0,120}/ig],
+  feeRelatedEarnings: [/fee[- ]related earnings[^\n]{0,120}/ig, /\bFRE\b[^\n]{0,80}/ig],
+  distributableEarnings: [/distributable earnings[^\n]{0,120}/ig],
+  managementFees: [/management fees?[^\n]{0,120}/ig, /advisory fees?[^\n]{0,120}/ig],
+  performanceIncome: [/incentive fees?[^\n]{0,120}/ig, /performance revenues?[^\n]{0,120}/ig, /carried interest[^\n]{0,120}/ig],
+  bookValue: [/stockholders[’'] equity[^\n]{0,120}/ig, /shareholders[’'] equity[^\n]{0,120}/ig, /book value[^\n]{0,120}/ig, /total equity[^\n]{0,120}/ig],
+  balanceSheetInvestments: [/balance sheet investments[^\n]{0,120}/ig, /principal investments[^\n]{0,120}/ig],
+  shareCount: [/shares outstanding[^\n]{0,120}/ig, /weighted average diluted shares[^\n]{0,120}/ig],
+  cash: [/cash and cash equivalents[^\n]{0,120}/ig],
+  debt: [/long.?term debt[^\n]{0,120}/ig, /borrowings[^\n]{0,120}/ig, /debt outstanding[^\n]{0,120}/ig],
+};
+
+const DIRECTIONAL_EARNINGS_PATTERNS = [/net income/i, /earnings available to common/i, /distributable earnings/i, /FFO/i, /AFFO/i, /net interest income/i];
+
 const TABLE_ROW_PATTERNS = {
   revenue: [/^total net sales$/i, /^net sales$/i, /^total revenue$/i, /^revenue$/i, /^revenues$/i],
   grossProfit: [/^gross profit$/i, /^gross margin$/i],
@@ -152,7 +180,9 @@ export async function extractDeterministicFilingData(filingSource) {
     tableFallback = await extractTableFallbackPacket(filingSource, filingContext, diagnostics);
   }
 
+  const assetManagerMetrics = await extractAssetManagerMetrics(filingSource, filingContext, diagnostics);
   const merged = mergeDeterministicPackets(structured, tableFallback, filingSource?.fallbackMetadata || {}, diagnostics);
+  merged.assetManagerMetrics = assetManagerMetrics;
   merged.diagnostics = diagnostics;
   merged.promptPacket = buildPromptPacket(merged);
   return merged;
@@ -164,6 +194,7 @@ export function buildPromptPacket(packet) {
     normalizedMetrics: packet.normalizedMetrics,
     historicalMetrics: packet.historicalMetrics || {},
     hardFieldSources: packet.fieldSources,
+    assetManagerMetrics: packet.assetManagerMetrics || {},
     reviewFlags: packet.reviewFlags,
     missingBaseInputs: packet.missingBaseInputs,
     reportedFacts: packet.reportedFacts.slice(0, 16),
@@ -208,6 +239,7 @@ function createEmptyDeterministicPacket() {
     confidenceMap: {},
     evidenceMap: {},
     fieldSources: {},
+    assetManagerMetrics: {},
     filingSelection: null,
   };
 }
@@ -850,7 +882,7 @@ function parseHtmlTable($, tableNode, sourceUrl, fallbackName) {
 
 function classifyTableKind(name = '') {
   if (/operations|income/i.test(name)) return 'income';
-  if (/balance/i.test(name)) return 'balance';
+  if (/balance|financial condition|financial position|assets and liabilities/i.test(name)) return 'balance';
   if (/cash flow/i.test(name)) return 'cashFlow';
   return 'other';
 }
@@ -1328,6 +1360,7 @@ function mergeDeterministicPackets(primary, fallback, fallbackMetadata, diagnost
   };
   merged.fieldSources = { ...fallback.fieldSources, ...primary.fieldSources };
   diagnostics.fieldSources = merged.fieldSources;
+  merged.assetManagerMetrics = mergeAssetManagerMetrics(primary.assetManagerMetrics, fallback.assetManagerMetrics);
 
   merged.reportedFacts = dedupeFacts([...primary.reportedFacts, ...fallback.reportedFacts]);
   merged.derivedMetrics = dedupeDerivedMetrics([...primary.derivedMetrics, ...fallback.derivedMetrics]);
@@ -1396,6 +1429,221 @@ function needsTableFallback(packet) {
   const metrics = packet?.normalizedMetrics || {};
   const required = ['revenueLtm', 'shareCount', 'netDebt', 'grossMarginPct', 'operatingMarginPct'];
   return required.some((field) => !Number.isFinite(metrics[field]));
+}
+
+export async function extractAssetManagerMetrics(filingSource, context, diagnostics = {}) {
+  const text = String(filingSource?.cleanedText || '');
+  const localDiagnostics = { unitApplications: [], tableReports: [] };
+  const tables = await loadStatementTables(filingSource, context, localDiagnostics).catch(() => []);
+  const statements = indexTablesByKind(tables || []);
+  const allTables = [...(tables || []), statements.balance, statements.income, statements.cashFlow].filter(Boolean);
+
+  const cashMetric = resolveAssetMetric('cash', text, allTables, { valueType: 'money' });
+  const debtMetric = resolveAssetMetric('debt', text, allTables, { valueType: 'money' });
+  const cashValue = firstFinite(cashMetric?.value, filingSource?.fallbackMetadata?.cash);
+  const debtValue = debtMetric?.value;
+
+  const metrics = {
+    aum: resolveAssetMetric('aum', text, allTables, { valueType: 'money' }),
+    feeRelatedEarnings: resolveAssetMetric('feeRelatedEarnings', text, allTables, { valueType: 'money' }),
+    distributableEarnings: resolveAssetMetric('distributableEarnings', text, allTables, { valueType: 'money' }),
+    managementFees: resolveAssetMetric('managementFees', text, allTables, { valueType: 'money' }),
+    performanceIncome: resolveAssetMetric('performanceIncome', text, allTables, { valueType: 'money' }),
+    bookValue: resolveAssetMetric('bookValue', text, allTables, { valueType: 'money' }),
+    balanceSheetInvestments: resolveAssetMetric('balanceSheetInvestments', text, allTables, { valueType: 'money' }),
+    shareCount: resolveAssetMetric('shareCount', text, allTables, { valueType: 'shares' }),
+    cash: Number.isFinite(cashMetric?.value)
+      ? cashMetric
+      : makeAssetMetricDetail(cashValue, Number.isFinite(cashValue) ? 'reported' : 'review_required', cashMetric?.evidence || '', Number.isFinite(cashValue) ? 'medium' : 'low'),
+    debt: debtMetric,
+    netDebt: makeAssetMetricDetail(Number.isFinite(cashValue) && Number.isFinite(debtValue) ? debtValue - cashValue : null, Number.isFinite(cashValue) && Number.isFinite(debtValue) ? 'derived' : 'review_required', Number.isFinite(cashValue) && Number.isFinite(debtValue) ? `Debt ${formatMillions(debtValue)} less cash ${formatMillions(cashValue)}.` : '', Number.isFinite(cashValue) && Number.isFinite(debtValue) ? 'medium' : 'low'),
+  };
+
+  metrics.shareCount = sanitizeAssetMetricDetail('shareCount', metrics.shareCount, { aum: metrics.aum?.value });
+  metrics.bookValue = sanitizeAssetMetricDetail('bookValue', metrics.bookValue, { aum: metrics.aum?.value });
+
+  diagnostics.assetManagerMetrics = metrics;
+  return metrics;
+}
+
+function resolveAssetMetric(field, text, tables, options = {}) {
+  const tableMetric = findFirstAssetTableMetric(tables, field, options);
+  const textMetric = findMetricFromText(text, ASSET_MANAGER_TEXT_PATTERNS[field], options);
+  if (Number.isFinite(tableMetric?.value)) {
+    return makeAssetMetricDetail(tableMetric.value, 'reported', tableMetric.evidence || `Detected ${field} in filing table.`, tableMetric.confidence || 'medium');
+  }
+  if (Number.isFinite(textMetric?.value)) {
+    return makeAssetMetricDetail(textMetric.value, 'reported', textMetric.evidence, textMetric.confidence || 'low');
+  }
+  return makeAssetMetricDetail(null, 'review_required', '', 'low');
+}
+
+function findFirstAssetTableMetric(tables, field, options = {}) {
+  const patterns = ASSET_MANAGER_TABLE_ROW_PATTERNS[field] || [];
+  for (const table of tables || []) {
+    const metric = findTableMetric(table, patterns, options);
+    if (Number.isFinite(metric?.value)) return metric;
+  }
+  return null;
+}
+
+function findMetricFromText(text, patterns = [], { valueType = 'money' } = {}) {
+  for (const pattern of patterns || []) {
+    const matches = text.match(pattern) || [];
+    for (const match of matches) {
+      const value = parseTextMetricValue(match, valueType);
+      if (Number.isFinite(value)) {
+        return {
+          value,
+          evidence: match.trim().slice(0, 180),
+          confidence: /billion|million|thousand|\|/.test(match) ? 'medium' : 'low',
+        };
+      }
+    }
+  }
+  return null;
+}
+
+function parseTextMetricValue(text, valueType = 'money') {
+  const normalizedText = String(text || '');
+  const scaledMatches = [...normalizedText.matchAll(/(\(?-?\$?\d[\d,.]*(?:\.\d+)?\)?)(?=\s*(trillion|billion|million|thousand))/ig)];
+  const preferredScaled = scaledMatches.at(-1)?.[1] || null;
+  const contextualMatch = normalizedText.match(/(?:was|were|totaled|of|at|to|approximately|about|equaled|equals|is)\s+(\(?-?\$?\d[\d,.]*(?:\.\d+)?\)?)/i);
+  const matches = [...normalizedText.matchAll(/\(?-?\$?\d[\d,.]*(?:\.\d+)?\)?/g)].map((match) => match[0]);
+  const candidate = preferredScaled || contextualMatch?.[1] || chooseTextNumericCandidate(matches, normalizedText, valueType);
+  const numeric = parseScaledNumber(candidate);
+  if (!Number.isFinite(numeric)) return null;
+  if (valueType === 'shares') {
+    if (/billion/i.test(normalizedText)) return numeric * 1000;
+    if (/million/i.test(normalizedText)) return numeric;
+    if (/thousand/i.test(normalizedText)) return numeric / 1000;
+    if (/shares? outstanding/i.test(normalizedText) && numeric >= 1 && numeric <= 1_000_000) return numeric;
+    return numeric / 1_000_000;
+  }
+  if (/trillion/i.test(normalizedText)) return numeric * 1_000_000;
+  if (/billion/i.test(normalizedText)) return numeric * 1000;
+  if (/million/i.test(normalizedText)) return numeric;
+  if (/thousand/i.test(normalizedText) || /\|/.test(normalizedText)) return numeric / 1000;
+  return Math.abs(numeric) > 100_000 ? numeric / 1_000_000 : numeric;
+}
+
+function chooseTextNumericCandidate(candidates = [], text = '', valueType = 'money') {
+  if (!candidates.length) return null;
+  const parsed = candidates
+    .map((candidate) => ({ candidate, value: parseScaledNumber(candidate) }))
+    .filter((entry) => Number.isFinite(entry.value));
+  if (!parsed.length) return null;
+
+  const nonYearValues = parsed.filter((entry) => Math.abs(entry.value) < 1900 || Math.abs(entry.value) > 2100);
+  const materiallySized = nonYearValues.filter((entry) => Math.abs(entry.value) > (valueType === 'shares' ? 1 : 31));
+  const ranked = materiallySized.length ? materiallySized : nonYearValues.length ? nonYearValues : parsed;
+  return ranked[0]?.candidate || null;
+}
+
+function makeAssetMetricDetail(value, classification = 'review_required', evidence = '', confidence = 'low') {
+  return {
+    value: Number.isFinite(value) ? value : null,
+    classification,
+    evidence,
+    confidence,
+  };
+}
+
+function sanitizeAssetMetricDetail(field, detail, context = {}) {
+  if (!Number.isFinite(detail?.value)) return detail;
+  const evidence = String(detail?.evidence || '');
+  const looksDateCaptured = /\b(?:dec|mar|jun|sep)[a-z]*\.?\s+\d{1,2}\b|\b20\d{2}\b/i.test(evidence);
+  if (field === 'shareCount' && looksDateCaptured && detail.value <= 50) {
+    return makeAssetMetricDetail(null, 'review_required', evidence, 'low');
+  }
+  if (field === 'bookValue' && detail.confidence === 'low' && detail.value <= 100 && (looksDateCaptured || Number.isFinite(context?.aum) && context.aum >= 1000)) {
+    return makeAssetMetricDetail(null, 'review_required', evidence, 'low');
+  }
+  return detail;
+}
+
+function buildEvidenceFromSources(parts = []) {
+  return parts.filter(Boolean).join(' | ');
+}
+
+function mergeAssetManagerMetrics(primary = {}, fallback = {}) {
+  const keys = new Set([...Object.keys(primary || {}), ...Object.keys(fallback || {})]);
+  return Object.fromEntries([...keys].map((key) => {
+    const primaryValue = primary?.[key];
+    const fallbackValue = fallback?.[key];
+    if (Number.isFinite(primaryValue?.value)) return [key, primaryValue];
+    if (Number.isFinite(fallbackValue?.value)) return [key, fallbackValue];
+    return [key, primaryValue || fallbackValue || makeAssetMetricDetail(null)];
+  }));
+}
+
+export function evaluateOperatingCompanyReadiness(args) {
+  return evaluateBaselineReadiness(args);
+}
+
+export function evaluateAssetManagerReadiness({ draftedBaseline, draftedBaselineMeta, assetManagerMetrics = {}, filingMetadata }) {
+  const checks = [];
+  const anchorFields = ['feeRelatedEarnings', 'distributableEarnings', 'bookValue'];
+  const availableAnchors = anchorFields.filter((field) => isUsableAssetAnchor(draftedBaseline?.[field], draftedBaselineMeta?.[field], assetManagerMetrics?.[field]));
+  const shareCountResolved = Number.isFinite(draftedBaseline?.shareCount) && draftedBaseline.shareCount >= 1 && draftedBaseline.shareCount <= 1_000_000;
+  pushCheck(checks, 'Share count resolved', shareCountResolved, shareCountResolved
+    ? `Share count ${round1(draftedBaseline.shareCount)} mm.`
+    : 'Share count is unresolved.');
+  pushCheck(checks, 'At least one valuation anchor resolved', availableAnchors.length >= 1, availableAnchors.length
+    ? `Usable anchors: ${availableAnchors.join(', ')}.`
+    : 'No usable FRE, distributable earnings, or book-value anchor was resolved.');
+  pushCheck(checks, 'Evidence quality is sufficient for a directional range', availableAnchors.length >= 1, availableAnchors.length
+    ? 'The filing supports at least one anchor family, so a cautious valuation range can be shown.'
+    : 'The filing does not support a defensible numeric anchor family yet.');
+
+  const blockingChecks = checks.filter((check) => !check.passed);
+  const canRunModel = blockingChecks.length === 0;
+  return {
+    state: canRunModel ? 'ready' : 'needs_review',
+    canRunModel,
+    checks,
+    blockingIssues: blockingChecks.map((check) => check.message),
+    unresolvedFields: [shareCountResolved ? null : 'shareCount', ...anchorFields.filter((field) => !isUsableAssetAnchor(draftedBaseline?.[field], draftedBaselineMeta?.[field], assetManagerMetrics?.[field]))].filter(Boolean),
+    lowConfidenceFields: Object.entries(draftedBaselineMeta || {}).filter(([, meta]) => (meta?.confidence || 'low') === 'low').map(([field]) => field),
+    summary: canRunModel
+      ? `${filingMetadata?.company || 'This filing'} supports an asset-manager valuation range using the available anchor families.`
+      : `${filingMetadata?.company || 'This filing'} does not yet support a clean asset-manager model pack, so the app will fall back to a wider directional frame when possible.`,
+    availableAnchors,
+  };
+}
+
+function isUsableAssetAnchor(value, meta = {}, metric = {}) {
+  if (!Number.isFinite(value) || Math.abs(value) < 0.0001) return false;
+  if (metric?.classification === 'review_required') return false;
+  if (meta?.classification === 'review_required') return false;
+  return true;
+}
+
+export function evaluateDirectionalReadiness({ draftedBaseline, filingMetadata }) {
+  const hasBook = Number.isFinite(draftedBaseline?.shareCount) && Number.isFinite(draftedBaseline?.bookValue);
+  const hasEarnings = Number.isFinite(draftedBaseline?.shareCount) && Number.isFinite(draftedBaseline?.earningsLikeAnchor);
+  const checks = [];
+  pushCheck(checks, 'Share count resolved', Number.isFinite(draftedBaseline?.shareCount), Number.isFinite(draftedBaseline?.shareCount)
+    ? `Share count ${round1(draftedBaseline.shareCount)} mm.`
+    : 'Share count is unresolved.');
+  pushCheck(checks, 'Directional numeric anchor available', hasBook || hasEarnings, hasBook
+    ? 'Book / equity anchor available.'
+    : hasEarnings
+      ? 'Earnings-like anchor available.'
+      : 'No defensible share-based anchor was available, so numeric valuation should be withheld.');
+  const blockingChecks = [];
+  return {
+    state: 'ready',
+    canRunModel: true,
+    checks,
+    blockingIssues: blockingChecks.map((check) => check.message),
+    unresolvedFields: [!hasBook && !hasEarnings ? 'numeric_range' : null].filter(Boolean),
+    lowConfidenceFields: hasBook || hasEarnings ? ['directional_range'] : ['numeric_range'],
+    summary: hasBook || hasEarnings
+      ? `${filingMetadata?.company || 'This filing'} supports a wide Directional Mode valuation range.`
+      : `${filingMetadata?.company || 'This filing'} is being shown in Directional Mode without numeric valuation because the filing did not support a defensible book/equity or earnings-like anchor.`,
+    hasNumericRange: hasBook || hasEarnings,
+  };
 }
 
 export function evaluateBaselineReadiness({ draftedBaseline, draftedBaselineMeta, normalizedMetrics, fieldSources, filingMetadata }) {
@@ -1509,10 +1757,11 @@ export function evaluateBaselineReadiness({ draftedBaseline, draftedBaselineMeta
   };
 }
 
-export function buildSafeReviewSummary({ filingMetadata, analysisStatus }) {
+export function buildSafeReviewSummary({ filingMetadata, analysisStatus, analysisMode = 'operating_company' }) {
+  const modeLabel = analysisMode === 'asset_manager' ? 'asset-manager valuation' : analysisMode === 'directional_only' ? 'directional valuation frame' : 'valuation';
   return {
     executiveSummary: {
-      headline: `${filingMetadata?.company || 'Filing'} needs review before valuation`,
+      headline: `${filingMetadata?.company || 'Filing'} needs review before ${modeLabel}`,
       body: analysisStatus?.summary || 'The filing was ingested, but the quantitative baseline was not reliable enough to support a valuation output.',
       bullets: analysisStatus?.blockingIssues || [],
     },

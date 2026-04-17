@@ -505,3 +505,324 @@ function clamp(value, min, max) {
 function round2(value) {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
+
+function round1(value) {
+  return Math.round((value + Number.EPSILON) * 10) / 10;
+}
+
+export const DEFAULT_ASSET_MANAGER_BASELINE = {
+  companyName: '',
+  unitLabel: '$mm',
+  aum: null,
+  feeRelatedEarnings: null,
+  distributableEarnings: null,
+  managementFees: null,
+  performanceIncome: null,
+  bookValue: null,
+  balanceSheetInvestments: null,
+  shareCount: null,
+  cash: null,
+  debt: null,
+  netDebt: null,
+};
+
+export const DEFAULT_DIRECTIONAL_BASELINE = {
+  companyName: '',
+  unitLabel: '$mm',
+  shareCount: null,
+  bookValue: null,
+  earningsLikeAnchor: null,
+  cash: null,
+  debt: null,
+  netDebt: null,
+  anchorLabel: '',
+};
+
+const ASSET_MANAGER_MULTIPLES = {
+  fre: { downside: 12, base: 16, upside: 20, weight: 0.45, label: 'FRE multiple' },
+  de: { downside: 8, base: 11, upside: 14, weight: 0.35, label: 'Distributable earnings multiple' },
+  book: { downside: 0.9, base: 1.2, upside: 1.5, weight: 0.2, label: 'Book / equity multiple' },
+};
+
+const DIRECTIONAL_BOOK_MULTIPLES = { downside: 0.8, base: 1.0, upside: 1.2 };
+const DIRECTIONAL_EARNINGS_MULTIPLES = { downside: 8, base: 11, upside: 14 };
+
+export function normalizeAssetManagerBaseline(input = {}) {
+  return {
+    companyName: String(input.companyName || '').trim(),
+    unitLabel: String(input.unitLabel || DEFAULT_ASSET_MANAGER_BASELINE.unitLabel).trim() || DEFAULT_ASSET_MANAGER_BASELINE.unitLabel,
+    aum: clampNullableNumber(input.aum, 0, 10_000_000_000),
+    feeRelatedEarnings: clampNullableNumber(input.feeRelatedEarnings, -1_000_000, 1_000_000),
+    distributableEarnings: clampNullableNumber(input.distributableEarnings, -1_000_000, 1_000_000),
+    managementFees: clampNullableNumber(input.managementFees, -1_000_000, 1_000_000),
+    performanceIncome: clampNullableNumber(input.performanceIncome, -1_000_000, 1_000_000),
+    bookValue: clampNullableNumber(input.bookValue, -10_000_000, 10_000_000),
+    balanceSheetInvestments: clampNullableNumber(input.balanceSheetInvestments, -10_000_000, 10_000_000),
+    shareCount: clampNullableNumber(input.shareCount, 0.1, 10_000_000),
+    cash: clampNullableNumber(input.cash, -10_000_000, 10_000_000),
+    debt: clampNullableNumber(input.debt, -10_000_000, 10_000_000),
+    netDebt: clampNullableNumber(input.netDebt, -10_000_000, 10_000_000),
+  };
+}
+
+export function normalizeDirectionalBaseline(input = {}) {
+  return {
+    companyName: String(input.companyName || '').trim(),
+    unitLabel: String(input.unitLabel || DEFAULT_DIRECTIONAL_BASELINE.unitLabel).trim() || DEFAULT_DIRECTIONAL_BASELINE.unitLabel,
+    shareCount: clampNullableNumber(input.shareCount, 0.1, 10_000_000),
+    bookValue: clampNullableNumber(input.bookValue, -10_000_000, 10_000_000),
+    earningsLikeAnchor: clampNullableNumber(input.earningsLikeAnchor, -1_000_000, 1_000_000),
+    cash: clampNullableNumber(input.cash, -10_000_000, 10_000_000),
+    debt: clampNullableNumber(input.debt, -10_000_000, 10_000_000),
+    netDebt: clampNullableNumber(input.netDebt, -10_000_000, 10_000_000),
+    anchorLabel: String(input.anchorLabel || '').trim(),
+  };
+}
+
+export function buildAssetManagerModelPack({ baseline }) {
+  const normalized = normalizeAssetManagerBaseline(baseline);
+  const baseScenario = buildAssetManagerScenarioModel('Base', normalized, 'base');
+  const upsideScenario = buildAssetManagerScenarioModel('Upside', normalized, 'upside');
+  const downsideScenario = buildAssetManagerScenarioModel('Downside', normalized, 'downside');
+  const scenarios = { base: baseScenario, upside: upsideScenario, downside: downsideScenario };
+  const anchorCount = baseScenario.valuation.availableAnchorCount;
+  const valuationSummary = {
+    range: {
+      low: downsideScenario.valuation.valuePerShare,
+      midpoint: baseScenario.valuation.valuePerShare,
+      high: upsideScenario.valuation.valuePerShare,
+    },
+    methodLabel: baseScenario.valuation.methodLabel,
+    confidence: baseScenario.valuation.confidence,
+  };
+
+  return {
+    analysisMode: 'asset_manager',
+    baseline: normalized,
+    scenarios,
+    comparison: buildAssetManagerComparison(scenarios),
+    valuationSummary,
+    baseSensitivity: null,
+    anchorSnapshot: buildAssetManagerAnchorSnapshot(normalized),
+    anchorWeights: buildAssetManagerAnchorWeights(baseScenario.valuation.anchorBreakdown),
+    narrative: {
+      summary: anchorCount === 1
+        ? 'Only one valuation anchor was usable, so the range was widened and confidence was reduced.'
+        : 'The valuation blends whichever anchor families were supported by the filing, with weights renormalized across the available anchors.',
+    },
+  };
+}
+
+export function buildAssetManagerScenarioModel(label, baseline, scenarioKey) {
+  const valuation = runAssetManagerValuation({ baseline, scenarioKey });
+  return {
+    label,
+    forecastTable: buildAssetManagerForecastRows(baseline, valuation),
+    valuation,
+    narrative: {
+      summary: valuation.availableAnchorCount === 1
+        ? `${label} case relies on a single supported anchor family and should be read as especially wide and directional.`
+        : `${label} case blends supported anchor families across FRE, distributable earnings, and book value where available.`,
+      keyAssumptions: valuation.anchorBreakdown.map((anchor) => `${anchor.label}: ${round2(anchor.multiple)}x / weight ${round1(anchor.weight * 100)}%`),
+    },
+  };
+}
+
+export function runAssetManagerValuation({ baseline, scenarioKey = 'base' }) {
+  const shareCount = baseline.shareCount;
+  const anchorInputs = [
+    buildAssetManagerAnchor('fre', baseline.feeRelatedEarnings, shareCount, scenarioKey),
+    buildAssetManagerAnchor('de', baseline.distributableEarnings, shareCount, scenarioKey),
+    buildAssetManagerAnchor('book', baseline.bookValue, shareCount, scenarioKey),
+  ].filter(Boolean);
+
+  const widened = anchorInputs.length <= 1;
+  const effectiveAnchors = anchorInputs.map((anchor) => {
+    const multiple = widened ? widenMultiple(anchor.multiple, scenarioKey) : anchor.multiple;
+    return { ...anchor, multiple, equityValue: anchor.metricValue * multiple, valuePerShare: shareCount > 0 ? (anchor.metricValue * multiple) / shareCount : null };
+  });
+
+  const totalWeight = effectiveAnchors.reduce((sum, anchor) => sum + anchor.baseWeight, 0) || 1;
+  const weightedAnchors = effectiveAnchors.map((anchor) => ({ ...anchor, weight: anchor.baseWeight / totalWeight }));
+  const equityValue = weightedAnchors.reduce((sum, anchor) => sum + (anchor.equityValue * anchor.weight), 0);
+  const valuePerShare = shareCount > 0 ? equityValue / shareCount : null;
+  const confidence = weightedAnchors.length >= 3 ? 'high' : weightedAnchors.length === 2 ? 'medium' : weightedAnchors.length === 1 ? 'low' : 'low';
+
+  return {
+    methodLabel: 'Blended asset-manager anchors',
+    equityValue,
+    enterpriseValue: null,
+    valuePerShare,
+    confidence,
+    availableAnchorCount: weightedAnchors.length,
+    anchorBreakdown: weightedAnchors,
+    rangeIsWidened: widened,
+  };
+}
+
+export function buildDirectionalModelPack({ baseline, directionalModeReason = '' }) {
+  const normalized = normalizeDirectionalBaseline(baseline);
+  const anchorType = Number.isFinite(normalized.shareCount) && Number.isFinite(normalized.bookValue) && Math.abs(normalized.bookValue) > 0.0001
+    ? 'book'
+    : Number.isFinite(normalized.shareCount) && Number.isFinite(normalized.earningsLikeAnchor) && Math.abs(normalized.earningsLikeAnchor) > 0.0001
+      ? 'earnings'
+      : null;
+
+  const scenarios = {
+    base: buildDirectionalScenarioModel('Base', normalized, 'base', anchorType),
+    upside: buildDirectionalScenarioModel('Upside', normalized, 'upside', anchorType),
+    downside: buildDirectionalScenarioModel('Downside', normalized, 'downside', anchorType),
+  };
+
+  return {
+    analysisMode: 'directional_only',
+    baseline: normalized,
+    hasNumericValuation: Boolean(anchorType),
+    anchorType,
+    directionalModeReason,
+    scenarios,
+    valuationSummary: {
+      range: anchorType ? {
+        low: scenarios.downside.valuation.valuePerShare,
+        midpoint: scenarios.base.valuation.valuePerShare,
+        high: scenarios.upside.valuation.valuePerShare,
+      } : null,
+      methodLabel: anchorType === 'book' ? 'Directional book / equity range' : anchorType === 'earnings' ? 'Directional earnings-like range' : 'Directional narrative only',
+      confidence: anchorType ? 'low' : 'low',
+    },
+    comparison: buildDirectionalComparison(scenarios, normalized, anchorType),
+    baseSensitivity: null,
+    anchorSnapshot: buildDirectionalAnchorSnapshot(normalized, anchorType),
+    anchorWeights: [],
+  };
+}
+
+function buildDirectionalScenarioModel(label, baseline, scenarioKey, anchorType) {
+  if (!anchorType) {
+    return {
+      label,
+      forecastTable: [],
+      valuation: {
+        methodLabel: 'Directional narrative only',
+        equityValue: null,
+        enterpriseValue: null,
+        valuePerShare: null,
+        confidence: 'low',
+        anchorBreakdown: [],
+        availableAnchorCount: 0,
+      },
+      narrative: {
+        summary: 'Numeric valuation was withheld because the filing did not support a defensible share-count plus book/equity or earnings-like anchor.',
+        keyAssumptions: [],
+      },
+    };
+  }
+
+  const multiple = anchorType === 'book'
+    ? DIRECTIONAL_BOOK_MULTIPLES[scenarioKey]
+    : DIRECTIONAL_EARNINGS_MULTIPLES[scenarioKey];
+  const metricValue = anchorType === 'book' ? baseline.bookValue : baseline.earningsLikeAnchor;
+  const equityValue = metricValue * multiple;
+  const valuePerShare = baseline.shareCount > 0 ? equityValue / baseline.shareCount : null;
+  const labelText = anchorType === 'book' ? 'Book / equity multiple' : (baseline.anchorLabel || 'Earnings-like anchor');
+
+  return {
+    label,
+    forecastTable: buildDirectionalForecastRows(baseline, anchorType, multiple, metricValue),
+    valuation: {
+      methodLabel: anchorType === 'book' ? 'Directional book / equity range' : 'Directional earnings-like range',
+      equityValue,
+      enterpriseValue: null,
+      valuePerShare,
+      confidence: 'low',
+      anchorBreakdown: [{ key: anchorType, label: labelText, metricValue, multiple, weight: 1, baseWeight: 1, equityValue, valuePerShare }],
+      availableAnchorCount: 1,
+    },
+    narrative: {
+      summary: anchorType === 'book'
+        ? `${label} case applies a wide book / equity multiple to the filing-supported equity base.`
+        : `${label} case applies a wide earnings-like multiple to the filing-supported anchor.` ,
+      keyAssumptions: [`${labelText}: ${round2(multiple)}x`],
+    },
+  };
+}
+
+function buildAssetManagerComparison(scenarios) {
+  return [
+    { metric: 'Implied value per share', prior: null, base: scenarios.base.valuation.valuePerShare, upside: scenarios.upside.valuation.valuePerShare, downside: scenarios.downside.valuation.valuePerShare, format: 'perShare' },
+    { metric: 'Implied equity value', prior: null, base: scenarios.base.valuation.equityValue, upside: scenarios.upside.valuation.equityValue, downside: scenarios.downside.valuation.equityValue, format: 'number' },
+    { metric: 'Anchor count', prior: null, base: scenarios.base.valuation.availableAnchorCount, upside: scenarios.upside.valuation.availableAnchorCount, downside: scenarios.downside.valuation.availableAnchorCount, format: 'count' },
+  ];
+}
+
+function buildDirectionalComparison(scenarios, baseline, anchorType) {
+  return [
+    { metric: 'Implied value per share', prior: null, base: scenarios.base.valuation.valuePerShare, upside: scenarios.upside.valuation.valuePerShare, downside: scenarios.downside.valuation.valuePerShare, format: 'perShare' },
+    { metric: anchorType === 'book' ? 'Book value' : (baseline.anchorLabel || 'Earnings-like anchor'), prior: null, base: anchorType === 'book' ? baseline.bookValue : baseline.earningsLikeAnchor, upside: anchorType === 'book' ? baseline.bookValue : baseline.earningsLikeAnchor, downside: anchorType === 'book' ? baseline.bookValue : baseline.earningsLikeAnchor, format: 'number' },
+  ];
+}
+
+function buildAssetManagerAnchorSnapshot(baseline) {
+  return [
+    { metric: 'AUM', value: baseline.aum, format: 'number' },
+    { metric: 'Fee-related earnings', value: baseline.feeRelatedEarnings, format: 'number' },
+    { metric: 'Distributable earnings', value: baseline.distributableEarnings, format: 'number' },
+    { metric: 'Book value', value: baseline.bookValue, format: 'number' },
+    { metric: 'Share count', value: baseline.shareCount, format: 'count' },
+  ].filter((row) => Number.isFinite(row.value));
+}
+
+function buildDirectionalAnchorSnapshot(baseline, anchorType) {
+  return [
+    { metric: 'Share count', value: baseline.shareCount, format: 'count' },
+    { metric: 'Book value', value: baseline.bookValue, format: 'number' },
+    { metric: anchorType === 'earnings' ? (baseline.anchorLabel || 'Earnings-like anchor') : 'Earnings-like anchor', value: baseline.earningsLikeAnchor, format: 'number' },
+  ].filter((row) => Number.isFinite(row.value));
+}
+
+function buildAssetManagerAnchorWeights(anchorBreakdown = []) {
+  return anchorBreakdown.map((anchor) => ({
+    key: anchor.key,
+    label: anchor.label,
+    enterpriseValue: anchor.equityValue,
+    delta: anchor.weight * 100,
+    format: 'weight',
+  }));
+}
+
+function buildAssetManagerForecastRows(baseline, valuation) {
+  return [
+    { year: 'Current', aum: baseline.aum, feeRelatedEarnings: baseline.feeRelatedEarnings, distributableEarnings: baseline.distributableEarnings, bookValue: baseline.bookValue, valuePerShare: valuation.valuePerShare },
+  ];
+}
+
+function buildDirectionalForecastRows(baseline, anchorType, multiple, metricValue) {
+  return [
+    { year: 'Current', shareCount: baseline.shareCount, bookValue: baseline.bookValue, earningsLikeAnchor: baseline.earningsLikeAnchor, selectedMultiple: multiple, selectedAnchor: metricValue, valuePerShare: baseline.shareCount > 0 ? (metricValue * multiple) / baseline.shareCount : null, anchorType },
+  ];
+}
+
+function buildAssetManagerAnchor(key, metricValue, shareCount, scenarioKey) {
+  if (!Number.isFinite(metricValue) || Math.abs(metricValue) < 0.0001 || !Number.isFinite(shareCount) || shareCount <= 0) return null;
+  const config = ASSET_MANAGER_MULTIPLES[key];
+  if (!config) return null;
+  return {
+    key,
+    label: config.label,
+    metricValue,
+    multiple: config[scenarioKey],
+    baseWeight: config.weight,
+  };
+}
+
+function widenMultiple(multiple, scenarioKey) {
+  if (scenarioKey === 'downside') return multiple * 0.9;
+  if (scenarioKey === 'upside') return multiple * 1.1;
+  return multiple;
+}
+
+function clampNullableNumber(value, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  return clamp(numeric, min, max);
+}

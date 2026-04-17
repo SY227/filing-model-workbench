@@ -356,6 +356,10 @@ function extractPromptSections(cleanedText, maxSectionChars = 2800) {
     { title: 'Management discussion', patterns: [/management'?s discussion and analysis/i, /md&a/i] },
     { title: 'Results of operations', patterns: [/results of operations/i] },
     { title: 'Liquidity and capital resources', patterns: [/liquidity and capital resources/i] },
+    { title: 'Assets under management', patterns: [/assets? under management/i, /fee[- ]paying assets? under management/i, /fee[- ]earning assets? under management/i] },
+    { title: 'Fee-related earnings', patterns: [/fee[- ]related earnings/i, /\bFRE\b/i, /distributable earnings/i] },
+    { title: 'Capital and book value', patterns: [/stockholders'? equity/i, /shareholders'? equity/i, /book value/i, /total equity/i] },
+    { title: 'Investment income and advisory fees', patterns: [/management fees/i, /advisory fees/i, /performance revenues?/i, /incentive fees?/i] },
     { title: 'Business overview', patterns: [/business/i, /overview/i] },
     { title: 'Risk factors', patterns: [/risk factors/i] },
   ];

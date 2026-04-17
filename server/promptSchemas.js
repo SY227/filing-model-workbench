@@ -6,19 +6,40 @@ const BANKER_STYLE = `Style requirements:
 - do not fabricate missing figures, precision, consensus data, or management intent
 - if evidence is thin, say so and keep scenario adjustments measured`;
 
-export function buildFilingExtractionPrompt({ filing, deterministicPacket }) {
+function buildExtractionModeInstructions(issuerArchetype) {
+  if (issuerArchetype === 'asset_manager') {
+    return `Focus on alternative-asset-manager economics.
+Prioritize AUM, fee-paying AUM, fee-related earnings, distributable earnings, management fees, performance or incentive income, book value, balance-sheet investments, share count, cash, debt, and net debt.
+Do not force gross margin, operating margin, capex, or D&A into the primary template when those are not the right economics.`;
+  }
+
+  if (issuerArchetype === 'financial_other' || issuerArchetype === 'directional_only') {
+    return `Focus on the issuer's actual valuation anchors and operating frame.
+Look for book value, stockholders' equity, earnings-like anchors, capital ratios, net interest income, premiums, FFO or AFFO, and other issuer-specific balance-sheet or earnings anchors.
+Do not force the filing into an operating-company DCF template when that is not defensible.`;
+  }
+
+  return `Use the standard operating-company lane.
+Deterministic SEC extraction remains authoritative for hard numeric baseline facts when present.`;
+}
+
+export function buildFilingExtractionPrompt({ filing, deterministicPacket, issuerArchetype = 'operating_company' }) {
   return `You are extracting a filing-grounded analysis base from a single public-company filing.
 
 ${BANKER_STYLE}
 
 The filing is the only primary source for this task.
 A deterministic SEC extraction packet is provided below and is authoritative for hard numeric baseline facts when present.
+Provisional issuer archetype: ${issuerArchetype}.
+${buildExtractionModeInstructions(issuerArchetype)}
 Return strict JSON only. Do not wrap in markdown.
 Do not invent numbers. Use null when a value is not directly supportable.
 Do not replace stronger deterministic SEC values with a weaker textual guess.
 
 Required JSON shape:
 {
+  "issuerArchetype": "operating_company" | "asset_manager" | "financial_other" | "directional_only" | null,
+  "analysisMode": string | null,
   "filingMetadata": {
     "company": string | null,
     "filingType": "10-Q" | "10-K" | "8-K" | "other" | null,
@@ -57,6 +78,19 @@ Required JSON shape:
       "evidence": string,
       "confidence": "high" | "medium" | "low"
     }]
+  },
+  "assetManagerMetrics": {
+    "aum": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "feeRelatedEarnings": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "distributableEarnings": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "managementFees": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "performanceIncome": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "bookValue": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "balanceSheetInvestments": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "shareCount": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "cash": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "debt": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" },
+    "netDebt": { "value": number | null, "classification": "reported" | "derived" | "review_required", "evidence": string, "confidence": "high" | "medium" | "low" }
   },
   "derivedMetrics": [{
     "metric": string,
@@ -119,13 +153,9 @@ ${BANKER_STYLE}
 
 Your job is to translate the filing into disciplined external-analyst work product.
 Preserve a measured tone. Do not overstate what the filing alone can prove.
-Scenario adjustments should be suitable for a deterministic model layer.
+This prompt is for operating companies only.
 Estimate only a near-term next-12-month revenue runway growth read, not a full five-year growth curve.
-This field is important. Return a numeric currentRunwayGrowthPct when the filing supports a directional next-12-month revenue view, and do not leave it null when the filing gives enough evidence to form a conservative runway estimate.
-Use filing evidence such as guidance, backlog or demand signals, capacity commentary, customer concentration, product cycle commentary, and one-time or temporary effects.
-Keep the runway estimate conservative and cite evidence in plain language.
-
-Critically, deterministic SEC extraction owns the hard quantitative baseline whenever it is available.
+Deterministic SEC extraction owns the hard quantitative baseline whenever it is available.
 For these hard fields, treat the deterministic packet as primary: currentRevenue, shareCount, cash, debt, netDebt, grossMarginStart, operatingMarginStart, taxRate, capexPct, daPct.
 Only use AI as a last-resort fallback when the deterministic packet is blank, and clearly mark that as review_required with low confidence.
 Where the filing directly supports a field, mark it reported.
@@ -137,6 +167,7 @@ Return strict JSON only. Do not wrap in markdown.
 
 Required JSON shape:
 {
+  "analysisMode": "operating_company",
   "draftedBaseline": {
     "companyName": string,
     "currentRevenue": number,
@@ -155,24 +186,7 @@ Required JSON shape:
     "netDebt": number,
     "exitEbitdaMultiple": number
   },
-  "draftedBaselineMeta": {
-    "companyName": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "currentRevenue": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "revenueGrowth": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "grossMarginStart": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "grossMarginEnd": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "operatingMarginStart": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "operatingMarginEnd": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "taxRate": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "capexPct": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "daPct": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "nwcPct": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "wacc": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "terminalGrowth": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "shareCount": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "netDebt": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" },
-    "exitEbitdaMultiple": { "classification": "reported" | "derived" | "proposed" | "review_required", "rationale": string, "evidence": string, "confidence": "high" | "medium" | "low" }
-  },
+  "draftedBaselineMeta": object,
   "currentRunwayGrowthPct": number | null,
   "currentRunwayGrowthMeta": {
     "classification": "reported" | "derived" | "proposed" | "review_required",
@@ -182,10 +196,7 @@ Required JSON shape:
     "source": string,
     "basis": string
   },
-  "whatMattersForModel": {
-    "summary": string,
-    "bullets": string[]
-  },
+  "whatMattersForModel": { "summary": string, "bullets": string[] },
   "proposedAssumptions": [{
     "field": string,
     "proposal": string,
@@ -205,45 +216,9 @@ Required JSON shape:
     "confidence": "high" | "medium" | "low"
   }],
   "scenarioAdjustments": {
-    "base": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    },
-    "upside": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    },
-    "downside": {
-      "revenueGrowthDeltaPpts": [number, number, number, number, number],
-      "grossMarginDeltaBps": [number, number, number, number, number],
-      "operatingMarginDeltaBps": [number, number, number, number, number],
-      "capexPctDeltaBps": [number, number, number, number, number],
-      "daPctDeltaBps": [number, number, number, number, number],
-      "nwcPctDeltaBps": [number, number, number, number, number],
-      "taxRateDeltaBps": [number, number, number, number, number],
-      "waccDeltaBps": number,
-      "terminalGrowthDeltaBps": number,
-      "summary": string,
-      "keyAssumptions": string[]
-    }
+    "base": object,
+    "upside": object,
+    "downside": object
   },
   "valuationFraming": {
     "summary": string,
@@ -251,6 +226,141 @@ Required JSON shape:
     "bridgeDrivers": [{ "driver": string, "effect": "positive" | "negative" | "mixed" | "neutral", "explanation": string, "confidence": "high" | "medium" | "low" }],
     "keySensitivities": [{ "factor": string, "implication": string, "confidence": "high" | "medium" | "low" }]
   },
+  "confidenceMap": object,
+  "evidenceMap": object,
+  "reviewFlags": [{ "item": string, "reason": string, "evidence": string, "confidence": "high" | "medium" | "low" }],
+  "checklist": [{ "task": string, "ownerHint": string, "priority": "high" | "medium" | "low" }]
+}
+
+Filing extraction JSON:
+${JSON.stringify(filingExtraction, null, 2)}
+
+Deterministic SEC packet:
+${JSON.stringify(deterministicPacket, null, 2)}`;
+}
+
+export function buildAssetManagerAnalysisPrompt({ filingExtraction, deterministicPacket }) {
+  return `You are producing filing-grounded valuation framing for an alternative asset manager.
+
+${BANKER_STYLE}
+
+This lane is explicitly for asset managers, not operating-company DCF work.
+Focus on AUM, fee-paying AUM, fee-related earnings, distributable earnings, management fees, performance or incentive income, book value, balance-sheet investments, share count, cash, debt, and net debt.
+Do not treat gross margin, operating margin, capex, or D&A as the primary template unless the filing makes them truly central.
+Keep the output usable for a valuation engine built from three anchor families: FRE multiple, distributable-earnings multiple, and book/equity multiple.
+If a field is missing, say so. Do not invent it.
+
+Return strict JSON only. Do not wrap in markdown.
+
+Required JSON shape:
+{
+  "analysisMode": "asset_manager",
+  "draftedBaseline": {
+    "companyName": string,
+    "aum": number | null,
+    "feeRelatedEarnings": number | null,
+    "distributableEarnings": number | null,
+    "managementFees": number | null,
+    "performanceIncome": number | null,
+    "bookValue": number | null,
+    "balanceSheetInvestments": number | null,
+    "shareCount": number | null,
+    "cash": number | null,
+    "debt": number | null,
+    "netDebt": number | null
+  },
+  "draftedBaselineMeta": object,
+  "whatMattersForModel": { "summary": string, "bullets": string[] },
+  "proposedAssumptions": [{
+    "field": string,
+    "proposal": string,
+    "rationale": string,
+    "classification": "proposed" | "review_required",
+    "evidence": string,
+    "confidence": "high" | "medium" | "low",
+    "reviewRequired": boolean
+  }],
+  "assumptionReview": [{
+    "field": string,
+    "currentBaseline": string,
+    "filingReadThrough": string,
+    "modelImplication": string,
+    "status": "reported" | "derived" | "proposed" | "review_required" | "missing",
+    "evidence": string,
+    "confidence": "high" | "medium" | "low"
+  }],
+  "valuationFraming": {
+    "summary": string,
+    "scenarioStructure": string[],
+    "bridgeDrivers": [{ "driver": string, "effect": "positive" | "negative" | "mixed" | "neutral", "explanation": string, "confidence": "high" | "medium" | "low" }],
+    "keySensitivities": [{ "factor": string, "implication": string, "confidence": "high" | "medium" | "low" }]
+  },
+  "directionalModeReason": string,
+  "confidenceMap": object,
+  "evidenceMap": object,
+  "reviewFlags": [{ "item": string, "reason": string, "evidence": string, "confidence": "high" | "medium" | "low" }],
+  "checklist": [{ "task": string, "ownerHint": string, "priority": "high" | "medium" | "low" }]
+}
+
+Filing extraction JSON:
+${JSON.stringify(filingExtraction, null, 2)}
+
+Deterministic SEC packet:
+${JSON.stringify(deterministicPacket, null, 2)}`;
+}
+
+export function buildDirectionalAnalysisPrompt({ filingExtraction, deterministicPacket, issuerArchetype = 'directional_only' }) {
+  return `You are producing an honest directional valuation frame for a non-operating-company issuer.
+
+${BANKER_STYLE}
+
+Issuer archetype: ${issuerArchetype}.
+Do not force a full DCF.
+If the filing supports book value, stockholders' equity, or an earnings-like anchor, surface that clearly so a simple wide directional range can be shown.
+If the filing does not support even that, say why numeric valuation should be withheld.
+
+Return strict JSON only. Do not wrap in markdown.
+
+Required JSON shape:
+{
+  "analysisMode": "directional_only",
+  "draftedBaseline": {
+    "companyName": string,
+    "shareCount": number | null,
+    "bookValue": number | null,
+    "earningsLikeAnchor": number | null,
+    "cash": number | null,
+    "debt": number | null,
+    "netDebt": number | null,
+    "anchorLabel": string | null
+  },
+  "draftedBaselineMeta": object,
+  "whatMattersForModel": { "summary": string, "bullets": string[] },
+  "proposedAssumptions": [{
+    "field": string,
+    "proposal": string,
+    "rationale": string,
+    "classification": "proposed" | "review_required",
+    "evidence": string,
+    "confidence": "high" | "medium" | "low",
+    "reviewRequired": boolean
+  }],
+  "assumptionReview": [{
+    "field": string,
+    "currentBaseline": string,
+    "filingReadThrough": string,
+    "modelImplication": string,
+    "status": "reported" | "derived" | "proposed" | "review_required" | "missing",
+    "evidence": string,
+    "confidence": "high" | "medium" | "low"
+  }],
+  "valuationFraming": {
+    "summary": string,
+    "scenarioStructure": string[],
+    "bridgeDrivers": [{ "driver": string, "effect": "positive" | "negative" | "mixed" | "neutral", "explanation": string, "confidence": "high" | "medium" | "low" }],
+    "keySensitivities": [{ "factor": string, "implication": string, "confidence": "high" | "medium" | "low" }]
+  },
+  "directionalModeReason": string,
   "confidenceMap": object,
   "evidenceMap": object,
   "reviewFlags": [{ "item": string, "reason": string, "evidence": string, "confidence": "high" | "medium" | "low" }],
@@ -295,12 +405,16 @@ Deterministic SEC packet:
 ${JSON.stringify(deterministicPacket, null, 2)}`;
 }
 
-export function buildReportFormattingPrompt({ filingExtraction, filingAnalysis, modelSummary, analysisStatus }) {
+export function buildReportFormattingPrompt({ analysisMode = 'operating_company', filingExtraction, filingAnalysis, modelSummary, analysisStatus }) {
   return `You are formatting a filing-grounded analysis pack for a client-ready finance workflow.
 
 ${BANKER_STYLE}
 
 The output should read like polished banker or senior-analyst work product.
+Analysis mode: ${analysisMode}.
+If the mode is operating_company, you may refer to a DCF and exit multiple cross-check.
+If the mode is asset_manager, frame the valuation around FRE, distributable earnings, and book/equity anchors.
+If the mode is directional_only, label the work as Directional Mode and make clear when the numeric range is intentionally wide or intentionally withheld.
 Return strict JSON only. Do not wrap in markdown.
 Keep it sharp and measured.
 If analysisStatus.state is "needs_review", say so plainly and do not present the valuation as complete or trustworthy.

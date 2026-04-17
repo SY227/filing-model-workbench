@@ -5,14 +5,20 @@ import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import fs from 'fs';
 import {
+  buildAssetManagerModelPack,
+  buildDirectionalModelPack,
   buildModelPack,
   DEFAULT_BASELINE,
+  normalizeAssetManagerBaseline,
   normalizeBaseline,
+  normalizeDirectionalBaseline,
   normalizeScenarioAdjustments,
   YEAR_LABELS,
 } from './modeling.js';
 import { buildSourcePacketForPrompt, ingestSource, normalizeFilingRequest, summarizeSource } from './sourceNormalization.js';
 import {
+  buildAssetManagerAnalysisPrompt,
+  buildDirectionalAnalysisPrompt,
   buildFilingAnalysisPrompt,
   buildFilingExtractionPrompt,
   buildReportFormattingPrompt,
@@ -20,18 +26,28 @@ import {
 } from './promptSchemas.js';
 import {
   applySchemaDefaults,
+  ASSET_MANAGER_ANALYSIS_SCHEMA,
+  ASSET_MANAGER_BASELINE_META_SCHEMA,
+  DIRECTIONAL_ANALYSIS_SCHEMA,
+  DIRECTIONAL_BASELINE_META_SCHEMA,
   FILING_ANALYSIS_SCHEMA,
   FILING_EXTRACTION_SCHEMA,
+  OPCO_BASELINE_META_SCHEMA,
   REPORT_PACK_SCHEMA,
-  DRAFTED_BASELINE_META_SCHEMA,
   RUNWAY_GROWTH_SCHEMA,
 } from './schemas.js';
 import {
   buildPromptPacket,
   buildSafeReviewSummary,
-  evaluateBaselineReadiness,
+  evaluateAssetManagerReadiness,
+  evaluateDirectionalReadiness,
+  evaluateOperatingCompanyReadiness,
   extractDeterministicFilingData,
 } from './deterministicExtraction.js';
+import {
+  detectIssuerArchetypeFromDeterministicSignals,
+  refineIssuerArchetype,
+} from './issuerArchetypes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -113,30 +129,57 @@ app.post(['/api/process', '/process'], async (req, res) => {
     });
 
     let modelPack = null;
+    let assetManagerPack = null;
+    let directionalPack = null;
     let reportPack = null;
 
     if (analysis.analysisStatus.canRunModel) {
-      markStage('forecast', 'Running deterministic model math', 'Running deterministic forecast and valuation math from the validated baseline.');
-      modelPack = buildModelPack({
-        baseline: normalizeBaseline(analysis.draftedBaseline),
-        scenarioAdjustments: {
-          base: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.base),
-          upside: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.upside),
-          downside: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.downside),
-        },
-      });
+      const forecastNote = analysis.analysisMode === 'asset_manager'
+        ? 'Running anchor-based asset-manager valuation math from the validated baseline.'
+        : analysis.analysisMode === 'directional_only'
+          ? 'Running Directional Mode valuation math from the validated baseline.'
+          : 'Running deterministic forecast and valuation math from the validated baseline.';
+      markStage('forecast', 'Running deterministic model math', forecastNote);
+
+      if (analysis.analysisMode === 'asset_manager') {
+        assetManagerPack = buildAssetManagerModelPack({
+          baseline: normalizeAssetManagerBaseline(analysis.draftedBaseline),
+        });
+      } else if (analysis.analysisMode === 'directional_only') {
+        directionalPack = buildDirectionalModelPack({
+          baseline: normalizeDirectionalBaseline(analysis.draftedBaseline),
+          directionalModeReason: analysis.directionalModeReason,
+        });
+      } else {
+        modelPack = buildModelPack({
+          baseline: normalizeBaseline(analysis.draftedBaseline),
+          scenarioAdjustments: {
+            base: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.base),
+            upside: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.upside),
+            downside: normalizeScenarioAdjustments(analysis.filingAnalysis?.scenarioAdjustments?.downside),
+          },
+        });
+      }
 
       markStage('pack', 'Preparing analysis pack', 'Formatting the final report shell, scenario commentary, and valuation framing.');
       reportPack = applySchemaDefaults(
         await callGeminiJson(
           buildReportFormattingPrompt({
+            analysisMode: analysis.analysisMode,
             filingExtraction: analysis.filingExtraction,
             filingAnalysis: {
               ...analysis.filingAnalysis,
               draftedBaseline: analysis.draftedBaseline,
               draftedBaselineMeta: analysis.draftedBaselineMeta,
+              directionalModeReason: analysis.directionalModeReason,
             },
-            modelSummary: buildModelSummaryForPrompt(modelPack),
+            modelSummary: buildModelSummaryForPrompt({
+              analysisMode: analysis.analysisMode,
+              modelPack,
+              assetManagerPack,
+              directionalPack,
+              directionalModeReason: analysis.directionalModeReason,
+            }),
             analysisStatus: analysis.analysisStatus,
           }),
           0.2
@@ -149,6 +192,7 @@ app.post(['/api/process', '/process'], async (req, res) => {
       reportPack = buildSafeReviewSummary({
         filingMetadata: mergeFilingMetadata(analysis.filingExtraction?.filingMetadata, analysis.filingSource.fallbackMetadata),
         analysisStatus: analysis.analysisStatus,
+        analysisMode: analysis.analysisMode,
       });
     }
 
@@ -158,6 +202,8 @@ app.post(['/api/process', '/process'], async (req, res) => {
       ...analysis,
       reportPack,
       modelPack,
+      assetManagerPack,
+      directionalPack,
       stageTimings,
       model: GEMINI_MODEL,
     }));
@@ -212,6 +258,7 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
   );
 
   const deterministicExtraction = await extractDeterministicFilingData(filingSource);
+  const provisionalArchetype = detectIssuerArchetypeFromDeterministicSignals({ filingSource, deterministicExtraction });
   logFilingSelection(deterministicExtraction?.diagnostics?.filingSelection);
   logDeterministicExtraction(deterministicExtraction);
 
@@ -221,6 +268,7 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
       buildFilingExtractionPrompt({
         filing: buildSourcePacketForPrompt(filingSource, 24_000),
         deterministicPacket: buildPromptPacket(deterministicExtraction),
+        issuerArchetype: provisionalArchetype.archetype,
       }),
       0.1,
       { timeoutMs: GEMINI_TIMEOUT_MS, label: 'filing extraction' }
@@ -232,9 +280,37 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
     filingExtractionAi,
     deterministicExtraction,
     filingSource,
+    provisionalArchetype,
   });
+  const refinedArchetype = refineIssuerArchetype({ provisionalArchetype, filingExtraction, deterministicExtraction, filingSource });
 
-  markStage?.('frame', 'Drafting baseline and model implications', 'Drafting soft assumptions and commentary around a deterministic-first baseline.');
+  const routingMode = refinedArchetype?.archetype || provisionalArchetype?.archetype || 'directional_only';
+  let modeResult;
+
+  if (routingMode === 'operating_company') {
+    markStage?.('frame', 'Drafting baseline and model implications', 'Drafting soft assumptions and commentary around a deterministic-first operating-company baseline.');
+    modeResult = await runOperatingCompanyFlow({ filingSource, filingExtraction, deterministicExtraction });
+  } else if (routingMode === 'asset_manager') {
+    markStage?.('frame', 'Drafting baseline and model implications', 'Drafting anchor-based asset-manager valuation inputs instead of forcing an operating-company template.');
+    modeResult = await runAssetManagerFlow({ filingSource, filingExtraction, deterministicExtraction });
+  } else {
+    markStage?.('frame', 'Drafting baseline and model implications', 'Drafting an honest directional valuation frame for a non-operating-company issuer.');
+    modeResult = await runDirectionalFlow({ filingSource, filingExtraction, deterministicExtraction, issuerArchetype: routingMode });
+  }
+
+  logBaselineDecision({ draftedBaseline: modeResult.draftedBaseline, draftedBaselineMeta: modeResult.draftedBaselineMeta, analysisStatus: modeResult.analysisStatus, deterministicExtraction });
+
+  return {
+    filingSource,
+    deterministicExtraction,
+    filingExtraction,
+    provisionalArchetype,
+    refinedArchetype,
+    ...modeResult,
+  };
+}
+
+async function runOperatingCompanyFlow({ filingSource, filingExtraction, deterministicExtraction }) {
   const filingAnalysis = applySchemaDefaults(
     await callGeminiJson(
       buildFilingAnalysisPrompt({
@@ -261,7 +337,7 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
     draftedBaseline,
     filingAnalysis,
   });
-  const analysisStatus = evaluateBaselineReadiness({
+  const analysisStatus = evaluateOperatingCompanyReadiness({
     draftedBaseline,
     draftedBaselineMeta,
     normalizedMetrics: filingExtraction?.reportedBase?.normalizedMetrics,
@@ -269,14 +345,12 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
     filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
   });
 
-  logBaselineDecision({ draftedBaseline, draftedBaselineMeta, analysisStatus, deterministicExtraction });
-
   return {
-    filingSource,
-    deterministicExtraction,
-    filingExtraction,
+    analysisMode: 'operating_company',
+    directionalModeReason: '',
     filingAnalysis: {
       ...filingAnalysis,
+      analysisMode: 'operating_company',
       resolvedRunwayGrowth,
     },
     draftedBaseline,
@@ -285,7 +359,100 @@ async function analyzeFilingRequest({ filingRequest, markStage }) {
   };
 }
 
-function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, filingSource }) {
+async function runAssetManagerFlow({ filingSource, filingExtraction, deterministicExtraction }) {
+  const filingAnalysis = applySchemaDefaults(
+    await callGeminiJson(
+      buildAssetManagerAnalysisPrompt({
+        filingExtraction: buildFilingAnalysisInput(filingExtraction),
+        deterministicPacket: buildPromptPacket(deterministicExtraction),
+      }),
+      0.18,
+      { timeoutMs: GEMINI_TIMEOUT_MS, label: 'asset manager analysis' }
+    ),
+    ASSET_MANAGER_ANALYSIS_SCHEMA
+  );
+
+  const draftedBaseline = buildAssetManagerBaseline({ filingExtraction, deterministicExtraction, filingAnalysis });
+  const draftedBaselineMeta = buildAssetManagerBaselineMeta({
+    aiMeta: filingAnalysis?.draftedBaselineMeta,
+    filingExtraction,
+    deterministicExtraction,
+    draftedBaseline,
+  });
+  const filingMetadata = mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata);
+  const analysisStatus = evaluateAssetManagerReadiness({
+    draftedBaseline,
+    draftedBaselineMeta,
+    assetManagerMetrics: filingExtraction?.assetManagerMetrics,
+    filingMetadata,
+  });
+
+  if (analysisStatus.canRunModel) {
+    return {
+      analysisMode: 'asset_manager',
+      directionalModeReason: '',
+      filingAnalysis: { ...filingAnalysis, analysisMode: 'asset_manager' },
+      draftedBaseline,
+      draftedBaselineMeta,
+      analysisStatus,
+    };
+  }
+
+  const directionalFallback = await runDirectionalFlow({
+    filingSource,
+    filingExtraction,
+    deterministicExtraction,
+    issuerArchetype: 'directional_only',
+    fallbackReason: 'Asset-manager anchors were too thin for a clean blended anchor pack, so the output falls back to Directional Mode.',
+  });
+
+  return {
+    ...directionalFallback,
+    originalAnalysisMode: 'asset_manager',
+  };
+}
+
+async function runDirectionalFlow({ filingSource, filingExtraction, deterministicExtraction, issuerArchetype = 'directional_only', fallbackReason = '' }) {
+  const filingAnalysis = applySchemaDefaults(
+    await callGeminiJson(
+      buildDirectionalAnalysisPrompt({
+        filingExtraction: buildFilingAnalysisInput(filingExtraction),
+        deterministicPacket: buildPromptPacket(deterministicExtraction),
+        issuerArchetype,
+      }),
+      0.16,
+      { timeoutMs: GEMINI_TIMEOUT_MS, label: 'directional analysis' }
+    ),
+    DIRECTIONAL_ANALYSIS_SCHEMA
+  );
+
+  const draftedBaseline = buildDirectionalBaseline({ filingExtraction, deterministicExtraction, filingAnalysis });
+  const draftedBaselineMeta = buildDirectionalBaselineMeta({
+    aiMeta: filingAnalysis?.draftedBaselineMeta,
+    filingExtraction,
+    deterministicExtraction,
+    draftedBaseline,
+  });
+  const analysisStatus = evaluateDirectionalReadiness({
+    draftedBaseline,
+    filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
+  });
+
+  return {
+    analysisMode: 'directional_only',
+    directionalModeReason: fallbackReason || filingAnalysis?.directionalModeReason || 'Directional Mode is being used because the filing does not cleanly fit the operating-company DCF lane.',
+    filingAnalysis: {
+      ...filingAnalysis,
+      analysisMode: 'directional_only',
+      directionalModeReason: fallbackReason || filingAnalysis?.directionalModeReason || '',
+    },
+    draftedBaseline,
+    draftedBaselineMeta,
+    analysisStatus,
+  };
+}
+
+function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, filingSource, provisionalArchetype }) {
   const deterministicMetrics = deterministicExtraction?.normalizedMetrics || {};
   const aiMetrics = filingExtractionAi?.reportedBase?.normalizedMetrics || {};
   const mergedMetadata = mergeFilingMetadata(
@@ -320,8 +487,15 @@ function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, fi
     liquidity: chooseDeterministic(aiMetrics.liquidity, deterministicMetrics.liquidity),
   };
 
+  const mergedAssetManagerMetrics = mergeAssetManagerExtractionMetrics(
+    deterministicExtraction?.assetManagerMetrics,
+    filingExtractionAi?.assetManagerMetrics
+  );
+
   return {
     ...filingExtractionAi,
+    issuerArchetype: filingExtractionAi?.issuerArchetype || provisionalArchetype?.archetype || null,
+    analysisMode: filingExtractionAi?.analysisMode || provisionalArchetype?.archetype || null,
     filingMetadata: mergedMetadata,
     businessOverview: filingExtractionAi?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     reportedBase: {
@@ -332,6 +506,7 @@ function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, fi
         ...(filingExtractionAi?.reportedBase?.reportedFacts || []),
       ], (item) => `${item.metric}|${item.valueText}|${item.evidence}`),
     },
+    assetManagerMetrics: mergedAssetManagerMetrics,
     derivedMetrics: dedupeByKey([
       ...(deterministicExtraction?.derivedMetrics || []),
       ...(filingExtractionAi?.derivedMetrics || []),
@@ -363,6 +538,17 @@ function mergeFilingExtraction({ filingExtractionAi, deterministicExtraction, fi
       diagnostics: deterministicExtraction?.diagnostics || {},
     },
   };
+}
+
+function mergeAssetManagerExtractionMetrics(deterministicMetrics = {}, aiMetrics = {}) {
+  const keys = new Set([...Object.keys(deterministicMetrics || {}), ...Object.keys(aiMetrics || {})]);
+  return Object.fromEntries([...keys].map((key) => {
+    const deterministicValue = deterministicMetrics?.[key];
+    const aiValue = aiMetrics?.[key];
+    if (Number.isFinite(deterministicValue?.value)) return [key, deterministicValue];
+    if (Number.isFinite(aiValue?.value)) return [key, aiValue];
+    return [key, deterministicValue || aiValue || { value: null, classification: 'review_required', evidence: '', confidence: 'low' }];
+  }));
 }
 
 function buildReportedBaseSummary(filingMetadata, normalizedMetrics) {
@@ -461,7 +647,7 @@ function buildDraftedBaseline({ filingExtraction, deterministicExtraction, filin
 }
 
 function buildDraftedBaselineMeta({ aiMeta, filingExtraction, deterministicExtraction, draftedBaseline, filingAnalysis }) {
-  const meta = applySchemaDefaults(aiMeta || {}, DRAFTED_BASELINE_META_SCHEMA);
+  const meta = applySchemaDefaults(aiMeta || {}, OPCO_BASELINE_META_SCHEMA);
   const fieldSources = deterministicExtraction?.fieldSources || {};
   const aiDraft = filingAnalysis?.draftedBaseline || {};
   const heuristicMeta = draftedBaseline?.diagnostics?.heuristicMeta || {};
@@ -524,15 +710,218 @@ function buildDraftedBaselineMeta({ aiMeta, filingExtraction, deterministicExtra
   return meta;
 }
 
-function buildReviewPacket({ filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta, deterministicExtraction, analysisStatus }) {
+function buildAssetManagerBaseline({ filingExtraction, deterministicExtraction, filingAnalysis }) {
+  const aiDraft = filingAnalysis?.draftedBaseline || {};
+  const assetMetrics = filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {};
+  const reportedBase = filingExtraction?.reportedBase?.normalizedMetrics || {};
+  const cash = chooseAssetMetricValue(assetMetrics.cash, aiDraft.cash, reportedBase.cash);
+  const debt = chooseAssetMetricValue(assetMetrics.debt, aiDraft.debt, reportedBase.debt);
+  const netDebt = chooseAssetMetricValue(assetMetrics.netDebt, aiDraft.netDebt, Number.isFinite(cash) && Number.isFinite(debt) ? debt - cash : reportedBase.netDebt);
+  const shareCount = firstFiniteNumber(reportedBase.shareCount, assetMetrics.shareCount?.value, coerceFiniteNumber(aiDraft.shareCount));
+
+  return {
+    companyName: filingExtraction?.filingMetadata?.company || aiDraft.companyName || '',
+    unitLabel: '$mm',
+    aum: chooseAssetMetricValue(assetMetrics.aum, aiDraft.aum),
+    feeRelatedEarnings: chooseAssetMetricValue(assetMetrics.feeRelatedEarnings, aiDraft.feeRelatedEarnings),
+    distributableEarnings: chooseAssetMetricValue(assetMetrics.distributableEarnings, aiDraft.distributableEarnings),
+    managementFees: chooseAssetMetricValue(assetMetrics.managementFees, aiDraft.managementFees),
+    performanceIncome: chooseAssetMetricValue(assetMetrics.performanceIncome, aiDraft.performanceIncome),
+    bookValue: chooseAssetMetricValue(assetMetrics.bookValue, aiDraft.bookValue),
+    balanceSheetInvestments: chooseAssetMetricValue(assetMetrics.balanceSheetInvestments, aiDraft.balanceSheetInvestments),
+    shareCount,
+    cash,
+    debt,
+    netDebt,
+  };
+}
+
+function buildAssetManagerBaselineMeta({ aiMeta, filingExtraction, deterministicExtraction, draftedBaseline }) {
+  const assetMetrics = filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {};
+  const fields = ['companyName', 'aum', 'feeRelatedEarnings', 'distributableEarnings', 'managementFees', 'performanceIncome', 'bookValue', 'balanceSheetInvestments', 'shareCount', 'cash', 'debt', 'netDebt'];
+  return buildModeBaselineMeta({
+    fields,
+    schema: ASSET_MANAGER_BASELINE_META_SCHEMA,
+    aiMeta,
+    draftedBaseline,
+    metricMap: assetMetrics,
+    companyEvidence: filingExtraction?.filingMetadata?.company,
+  });
+}
+
+function buildDirectionalBaseline({ filingExtraction, deterministicExtraction, filingAnalysis }) {
+  const aiDraft = filingAnalysis?.draftedBaseline || {};
+  const assetMetrics = filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {};
+  const reportedBase = filingExtraction?.reportedBase?.normalizedMetrics || {};
+  const shareCount = firstFiniteNumber(reportedBase.shareCount, assetMetrics.shareCount?.value, coerceFiniteNumber(aiDraft.shareCount));
+  const bookValue = chooseAssetMetricValue(assetMetrics.bookValue, aiDraft.bookValue);
+  const earningsLikeAnchor = firstFiniteNumber(
+    coerceFiniteNumber(aiDraft.earningsLikeAnchor),
+    assetMetrics.distributableEarnings?.value,
+    assetMetrics.feeRelatedEarnings?.value,
+    inferDirectionalAnchorFromNarrative(filingExtraction)
+  );
+  const cash = chooseAssetMetricValue(assetMetrics.cash, aiDraft.cash, reportedBase.cash);
+  const debt = chooseAssetMetricValue(assetMetrics.debt, aiDraft.debt, reportedBase.debt);
+  const netDebt = chooseAssetMetricValue(assetMetrics.netDebt, aiDraft.netDebt, Number.isFinite(cash) && Number.isFinite(debt) ? debt - cash : reportedBase.netDebt);
+
+  return {
+    companyName: filingExtraction?.filingMetadata?.company || aiDraft.companyName || '',
+    unitLabel: '$mm',
+    shareCount,
+    bookValue,
+    earningsLikeAnchor,
+    cash,
+    debt,
+    netDebt,
+    anchorLabel: aiDraft.anchorLabel || inferDirectionalAnchorLabel(filingExtraction),
+  };
+}
+
+function buildDirectionalBaselineMeta({ aiMeta, filingExtraction, deterministicExtraction, draftedBaseline }) {
+  const assetMetrics = filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {};
+  const fields = ['companyName', 'shareCount', 'bookValue', 'earningsLikeAnchor', 'cash', 'debt', 'netDebt', 'anchorLabel'];
+  return buildModeBaselineMeta({
+    fields,
+    schema: DIRECTIONAL_BASELINE_META_SCHEMA,
+    aiMeta,
+    draftedBaseline,
+    metricMap: {
+      ...assetMetrics,
+      earningsLikeAnchor: numberToMetaDetail(draftedBaseline?.earningsLikeAnchor, draftedBaseline?.anchorLabel || 'Narrative earnings-like anchor'),
+      anchorLabel: { value: draftedBaseline?.anchorLabel, classification: draftedBaseline?.anchorLabel ? 'derived' : 'review_required', evidence: draftedBaseline?.anchorLabel || '', confidence: draftedBaseline?.anchorLabel ? 'medium' : 'low' },
+    },
+    companyEvidence: filingExtraction?.filingMetadata?.company,
+  });
+}
+
+function buildModeBaselineMeta({ fields, schema = OPCO_BASELINE_META_SCHEMA, aiMeta, draftedBaseline, metricMap = {}, companyEvidence = '' }) {
+  const meta = applySchemaDefaults(aiMeta || {}, schema);
+  fields.forEach((field) => {
+    if (field === 'companyName') {
+      meta[field] = {
+        classification: draftedBaseline?.companyName ? 'reported' : 'review_required',
+        rationale: draftedBaseline?.companyName ? 'Company name comes directly from filing metadata.' : 'Company name was not resolved from filing metadata.',
+        evidence: companyEvidence || draftedBaseline?.companyName || '',
+        confidence: draftedBaseline?.companyName ? 'high' : 'low',
+      };
+      return;
+    }
+
+    const metric = metricMap?.[field];
+    if (metric && (Number.isFinite(metric.value) || (typeof metric.value === 'string' && metric.value))) {
+      meta[field] = {
+        classification: metric.classification || 'derived',
+        rationale: metric.classification === 'reported' ? 'Direct filing-supported metric.' : 'Filing-supported metric requiring some normalization or framing.',
+        evidence: metric.evidence || '',
+        confidence: metric.confidence || 'medium',
+      };
+      return;
+    }
+
+    if (Number.isFinite(draftedBaseline?.[field]) || (typeof draftedBaseline?.[field] === 'string' && draftedBaseline?.[field])) {
+      meta[field] = {
+        classification: 'proposed',
+        rationale: `No deterministic value was available for ${field}, so the analysis-layer fallback is retained with explicit review context.`,
+        evidence: meta[field]?.evidence || 'AI analysis fallback.',
+        confidence: meta[field]?.confidence || 'low',
+      };
+      return;
+    }
+
+    meta[field] = {
+      classification: 'review_required',
+      rationale: `No reliable value is available for ${field}.`,
+      evidence: meta[field]?.evidence || 'Value unresolved.',
+      confidence: 'low',
+    };
+  });
+  return meta;
+}
+
+function numberToMetaDetail(value, evidence = '') {
+  return {
+    value: Number.isFinite(value) ? value : null,
+    classification: Number.isFinite(value) ? 'derived' : 'review_required',
+    evidence,
+    confidence: Number.isFinite(value) ? 'low' : 'low',
+  };
+}
+
+function chooseAssetMetricValue(metric, ...fallbacks) {
+  if (Number.isFinite(metric?.value)) return metric.value;
+  return firstFiniteNumber(...fallbacks);
+}
+
+function coerceFiniteNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function inferDirectionalAnchorFromNarrative(filingExtraction) {
+  const text = JSON.stringify([
+    ...(filingExtraction?.reportedBase?.reportedFacts || []),
+    ...(filingExtraction?.derivedMetrics || []),
+    ...(filingExtraction?.keyTakeaways || []),
+  ]);
+  const patterns = [
+    /net interest income[^\n]{0,120}/ig,
+    /earnings available to common[^\n]{0,120}/ig,
+    /net income[^\n]{0,120}/ig,
+    /distributable earnings[^\n]{0,120}/ig,
+    /\bFFO\b[^\n]{0,120}/ig,
+    /\bAFFO\b[^\n]{0,120}/ig,
+  ];
+
+  for (const pattern of patterns) {
+    const matches = text.match(pattern) || [];
+    for (const match of matches) {
+      const scaledMatch = [...match.matchAll(/(\(?-?\$?\d[\d,.]*(?:\.\d+)?\)?)(?=\s*(trillion|billion|million|thousand))/ig)].at(-1)?.[1] || null;
+      const candidate = scaledMatch || [...match.matchAll(/\(?-?\$?\d[\d,.]*(?:\.\d+)?\)?/g)].map((entry) => entry[0]).find(Boolean);
+      if (!candidate) continue;
+      const numeric = Number(String(candidate).replace(/[()$,]/g, '').replace(/,/g, ''));
+      if (!Number.isFinite(numeric)) continue;
+      if (/trillion/i.test(match)) return numeric * 1_000_000;
+      if (/billion/i.test(match)) return numeric * 1000;
+      if (/million/i.test(match)) return numeric;
+      if (/thousand/i.test(match) || /\|/.test(match)) return numeric / 1000;
+      if (Math.abs(numeric) > 100_000) return numeric / 1_000_000;
+      if (Math.abs(numeric) > 31) return numeric;
+    }
+  }
+
+  return null;
+}
+
+function inferDirectionalAnchorLabel(filingExtraction) {
+  const text = JSON.stringify([
+    ...(filingExtraction?.reportedBase?.reportedFacts || []),
+    ...(filingExtraction?.derivedMetrics || []),
+    ...(filingExtraction?.keyTakeaways || []),
+  ]);
+  if (/net interest income/i.test(text)) return 'Net interest income';
+  if (/FFO/i.test(text)) return 'FFO';
+  if (/AFFO/i.test(text)) return 'AFFO';
+  if (/distributable earnings/i.test(text)) return 'Distributable earnings';
+  if (/net income/i.test(text)) return 'Net income';
+  return 'Earnings-like anchor';
+}
+
+function buildReviewPacket({ filingSource, filingExtraction, draftedBaseline, draftedBaselineMeta, deterministicExtraction, analysisStatus, analysisMode, provisionalArchetype, refinedArchetype, directionalModeReason }) {
   return {
     generatedAt: new Date().toISOString(),
+    analysisMode,
+    directionalModeReason,
+    provisionalArchetype,
+    refinedArchetype,
     filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
     filingSelection: deterministicExtraction?.diagnostics?.filingSelection || deterministicExtraction?.filingSelection || null,
     analysisStatus,
     sources: { filing: summarizeSource(filingSource) },
     businessOverview: filingExtraction?.businessOverview || { summary: '', businessLines: [], segmentNotes: [], geographyNotes: [] },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
+    assetManagerMetrics: filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {},
     derivedMetrics: filingExtraction?.derivedMetrics || [],
     keyTakeaways: filingExtraction?.keyTakeaways || [],
     modelDrivers: filingExtraction?.modelDrivers || [],
@@ -551,24 +940,21 @@ function buildReviewPacket({ filingSource, filingExtraction, draftedBaseline, dr
   };
 }
 
-function buildModelSummaryForPrompt(modelPack) {
-  const comparison = modelPack.comparison.map((row) => ({
-    metric: row.metric,
-    prior: row.prior,
-    base: row.base,
-    upside: row.upside,
-    downside: row.downside,
-    format: row.format,
-  }));
+function buildModelSummaryForPrompt({ analysisMode, modelPack, assetManagerPack, directionalPack, directionalModeReason }) {
+  const activePack = analysisMode === 'asset_manager' ? assetManagerPack : analysisMode === 'directional_only' ? directionalPack : modelPack;
+  if (!activePack) return { analysisMode, directionalModeReason };
 
   return {
-    years: YEAR_LABELS,
-    comparison,
-    changeVsPrior: modelPack.changeVsPrior,
-    baseValuation: modelPack.scenarios.base.valuation,
-    upsideValuation: modelPack.scenarios.upside.valuation,
-    downsideValuation: modelPack.scenarios.downside.valuation,
-    valuationBridge: modelPack.valuationBridge,
+    analysisMode,
+    years: activePack.years || YEAR_LABELS,
+    comparison: activePack.comparison || [],
+    valuationSummary: activePack.valuationSummary || {},
+    baseValuation: activePack.scenarios?.base?.valuation || null,
+    upsideValuation: activePack.scenarios?.upside?.valuation || null,
+    downsideValuation: activePack.scenarios?.downside?.valuation || null,
+    valuationBridge: activePack.valuationBridge || activePack.anchorWeights || [],
+    anchorSnapshot: activePack.anchorSnapshot || [],
+    directionalModeReason,
   };
 }
 
@@ -580,14 +966,24 @@ function buildResult({
   draftedBaseline,
   draftedBaselineMeta,
   analysisStatus,
+  analysisMode,
+  directionalModeReason,
+  provisionalArchetype,
+  refinedArchetype,
   reportPack,
   modelPack,
+  assetManagerPack,
+  directionalPack,
   stageTimings,
   model,
 }) {
   return {
     generatedAt: new Date().toISOString(),
     model,
+    analysisMode,
+    directionalModeReason,
+    provisionalArchetype,
+    refinedArchetype,
     analysisStatus,
     filingMetadata: mergeFilingMetadata(filingExtraction?.filingMetadata, filingSource.fallbackMetadata),
     filingSelection: deterministicExtraction?.diagnostics?.filingSelection || deterministicExtraction?.filingSelection || null,
@@ -607,11 +1003,14 @@ function buildResult({
       drivers: filingExtraction?.modelDrivers || [],
     },
     reportedBase: filingExtraction?.reportedBase || { summary: '', reportedFacts: [], normalizedMetrics: {} },
+    assetManagerMetrics: filingExtraction?.assetManagerMetrics || deterministicExtraction?.assetManagerMetrics || {},
     derivedMetrics: filingExtraction?.derivedMetrics || [],
     proposedAssumptions: filingAnalysis?.proposedAssumptions || [],
     assumptionReview: filingAnalysis?.assumptionReview || [],
     scenarioWriteups: reportPack?.scenarioWriteups || {},
     modelPack,
+    assetManagerPack,
+    directionalPack,
     valuationSummary: {
       summary: reportPack?.valuationSummary?.summary || filingAnalysis?.valuationFraming?.summary || '',
       bullets: reportPack?.valuationSummary?.bullets || [],
@@ -1243,6 +1642,8 @@ function logBaselineDecision({ draftedBaseline, draftedBaselineMeta, analysisSta
 
 function buildFilingAnalysisInput(filingExtraction) {
   return {
+    issuerArchetype: filingExtraction?.issuerArchetype || null,
+    analysisMode: filingExtraction?.analysisMode || null,
     filingMetadata: filingExtraction?.filingMetadata || null,
     businessOverview: filingExtraction?.businessOverview || null,
     reportedBase: {
@@ -1250,6 +1651,7 @@ function buildFilingAnalysisInput(filingExtraction) {
       normalizedMetrics: filingExtraction?.reportedBase?.normalizedMetrics || {},
       reportedFacts: (filingExtraction?.reportedBase?.reportedFacts || []).slice(0, 12),
     },
+    assetManagerMetrics: filingExtraction?.assetManagerMetrics || {},
     derivedMetrics: (filingExtraction?.derivedMetrics || []).slice(0, 8),
     keyTakeaways: (filingExtraction?.keyTakeaways || []).slice(0, 10),
     modelDrivers: (filingExtraction?.modelDrivers || []).slice(0, 10),
