@@ -6,3 +6,16 @@ npm-debug.log*
 
 .next
 .vercel
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Generated repo dump files
+*_all_files.txt
+all_files*.txt
+
+# Local temporary scripts
+tmp_*.mjs
+tmp_*.js
