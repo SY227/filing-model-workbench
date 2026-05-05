@@ -79,13 +79,15 @@ export function normalizeScenarioAdjustments(input = {}) {
   };
 }
 
-export function buildModelPack({ baseline, scenarioAdjustments }) {
-  const normalizedAdjustments = {
+export function buildModelPack({ baseline, scenarioAdjustments = {} }) {
+  let normalizedAdjustments = {
     prior: normalizeScenarioAdjustments(ZERO_SCENARIO_ADJUSTMENTS),
-    base: normalizeScenarioAdjustments(scenarioAdjustments.base),
-    upside: normalizeScenarioAdjustments(scenarioAdjustments.upside),
-    downside: normalizeScenarioAdjustments(scenarioAdjustments.downside),
+    base: normalizeScenarioAdjustments(scenarioAdjustments?.base),
+    upside: normalizeScenarioAdjustments(scenarioAdjustments?.upside),
+    downside: normalizeScenarioAdjustments(scenarioAdjustments?.downside),
   };
+
+  normalizedAdjustments = ensureScenarioSeparation(normalizedAdjustments);
 
   const priorView = buildScenarioModel('Prior View', baseline, normalizedAdjustments.prior);
   const baseScenario = buildScenarioModel('Base', baseline, normalizedAdjustments.base);
@@ -488,7 +490,12 @@ function buildWorkingCapitalPath({ startPct, targetPct, profile = 'balanced' }) 
 }
 
 function normalizeArray(input, fallback, length, min = -Infinity, max = Infinity) {
-  const source = Array.isArray(input) ? input : fallback;
+  const scalar = Number(input);
+  const source = Array.isArray(input)
+    ? input
+    : Number.isFinite(scalar)
+      ? Array(length).fill(scalar)
+      : fallback;
   return Array.from({ length }, (_value, index) => clampNumber(source[index], fallback[index] ?? 0, min, max));
 }
 

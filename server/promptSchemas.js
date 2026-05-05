@@ -165,6 +165,14 @@ Where the field is especially uncertain, mark it review_required and keep the as
 
 Return strict JSON only. Do not wrap in markdown.
 
+Scenario adjustments are deltas from draftedBaseline, not absolute values.
+Return numeric arrays for all scenario adjustment fields.
+Do not return empty objects for base, upside, or downside.
+Base, upside, and downside must not be identical.
+Upside should usually have stronger growth and/or margins, lower WACC, and/or higher terminal growth than base.
+Downside should usually have weaker growth and/or margins, higher WACC, and/or lower terminal growth than base.
+Keep all adjustments measured and filing-grounded.
+
 Required JSON shape:
 {
   "analysisMode": "operating_company",
@@ -216,9 +224,45 @@ Required JSON shape:
     "confidence": "high" | "medium" | "low"
   }],
   "scenarioAdjustments": {
-    "base": object,
-    "upside": object,
-    "downside": object
+    "base": {
+      "revenueGrowthDeltaPpts": [number, number, number, number, number],
+      "grossMarginDeltaBps": [number, number, number, number, number],
+      "operatingMarginDeltaBps": [number, number, number, number, number],
+      "capexPctDeltaBps": [number, number, number, number, number],
+      "daPctDeltaBps": [number, number, number, number, number],
+      "nwcPctDeltaBps": [number, number, number, number, number],
+      "taxRateDeltaBps": [number, number, number, number, number],
+      "waccDeltaBps": number,
+      "terminalGrowthDeltaBps": number,
+      "summary": string,
+      "keyAssumptions": string[]
+    },
+    "upside": {
+      "revenueGrowthDeltaPpts": [number, number, number, number, number],
+      "grossMarginDeltaBps": [number, number, number, number, number],
+      "operatingMarginDeltaBps": [number, number, number, number, number],
+      "capexPctDeltaBps": [number, number, number, number, number],
+      "daPctDeltaBps": [number, number, number, number, number],
+      "nwcPctDeltaBps": [number, number, number, number, number],
+      "taxRateDeltaBps": [number, number, number, number, number],
+      "waccDeltaBps": number,
+      "terminalGrowthDeltaBps": number,
+      "summary": string,
+      "keyAssumptions": string[]
+    },
+    "downside": {
+      "revenueGrowthDeltaPpts": [number, number, number, number, number],
+      "grossMarginDeltaBps": [number, number, number, number, number],
+      "operatingMarginDeltaBps": [number, number, number, number, number],
+      "capexPctDeltaBps": [number, number, number, number, number],
+      "daPctDeltaBps": [number, number, number, number, number],
+      "nwcPctDeltaBps": [number, number, number, number, number],
+      "taxRateDeltaBps": [number, number, number, number, number],
+      "waccDeltaBps": number,
+      "terminalGrowthDeltaBps": number,
+      "summary": string,
+      "keyAssumptions": string[]
+    }
   },
   "valuationFraming": {
     "summary": string,

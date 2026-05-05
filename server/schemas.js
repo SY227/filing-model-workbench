@@ -113,6 +113,20 @@ export const FILING_EXTRACTION_SCHEMA = {
   missingBaseInputs: [],
 };
 
+const SCENARIO_ADJUSTMENT_SCHEMA = {
+  revenueGrowthDeltaPpts: [0, 0, 0, 0, 0],
+  grossMarginDeltaBps: [0, 0, 0, 0, 0],
+  operatingMarginDeltaBps: [0, 0, 0, 0, 0],
+  capexPctDeltaBps: [0, 0, 0, 0, 0],
+  daPctDeltaBps: [0, 0, 0, 0, 0],
+  nwcPctDeltaBps: [0, 0, 0, 0, 0],
+  taxRateDeltaBps: [0, 0, 0, 0, 0],
+  waccDeltaBps: 0,
+  terminalGrowthDeltaBps: 0,
+  summary: '',
+  keyAssumptions: [],
+};
+
 export const FILING_ANALYSIS_SCHEMA = {
   analysisMode: 'operating_company',
   draftedBaseline: {},
@@ -133,9 +147,9 @@ export const FILING_ANALYSIS_SCHEMA = {
   proposedAssumptions: [],
   assumptionReview: [],
   scenarioAdjustments: {
-    base: {},
-    upside: {},
-    downside: {},
+    base: SCENARIO_ADJUSTMENT_SCHEMA,
+    upside: SCENARIO_ADJUSTMENT_SCHEMA,
+    downside: SCENARIO_ADJUSTMENT_SCHEMA,
   },
   valuationFraming: {
     summary: '',
