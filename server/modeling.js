@@ -123,6 +123,112 @@ export function buildModelPack({ baseline, scenarioAdjustments = {} }) {
   };
 }
 
+
+const DEFAULT_UPSIDE_SCENARIO_SPREAD = {
+  revenueGrowthDeltaPpts: [2.0, 2.0, 1.5, 1.5, 1.0],
+  grossMarginDeltaBps: [50, 75, 100, 125, 150],
+  operatingMarginDeltaBps: [75, 100, 125, 150, 175],
+  capexPctDeltaBps: [-25, -25, -25, -25, -25],
+  daPctDeltaBps: [0, 0, 0, 0, 0],
+  nwcPctDeltaBps: [-25, -25, -25, -25, -25],
+  taxRateDeltaBps: [0, 0, 0, 0, 0],
+  waccDeltaBps: -50,
+  terminalGrowthDeltaBps: 25,
+  summary: 'Upside case applies stronger revenue cadence, operating leverage, lighter capital intensity, and a modestly more constructive valuation frame.',
+  keyAssumptions: [
+    'Higher revenue growth versus base case',
+    'Stronger operating leverage',
+    'Slightly lower WACC',
+    'Slightly higher terminal growth',
+  ],
+};
+
+const DEFAULT_DOWNSIDE_SCENARIO_SPREAD = {
+  revenueGrowthDeltaPpts: [-2.0, -2.0, -1.5, -1.5, -1.0],
+  grossMarginDeltaBps: [-50, -75, -100, -125, -150],
+  operatingMarginDeltaBps: [-75, -100, -125, -150, -175],
+  capexPctDeltaBps: [25, 25, 25, 25, 25],
+  daPctDeltaBps: [0, 0, 0, 0, 0],
+  nwcPctDeltaBps: [25, 25, 25, 25, 25],
+  taxRateDeltaBps: [0, 0, 0, 0, 0],
+  waccDeltaBps: 50,
+  terminalGrowthDeltaBps: -25,
+  summary: 'Downside case applies softer revenue cadence, margin pressure, heavier cash-flow drag, and a modestly more conservative valuation frame.',
+  keyAssumptions: [
+    'Lower revenue growth versus base case',
+    'Weaker operating leverage',
+    'Slightly higher WACC',
+    'Slightly lower terminal growth',
+  ],
+};
+
+function ensureScenarioSeparation(adjustments) {
+  const base = adjustments.base || normalizeScenarioAdjustments();
+
+  return {
+    ...adjustments,
+    base,
+    upside: hasMeaningfulScenarioDelta(adjustments.upside, base)
+      ? adjustments.upside
+      : mergeScenarioSpread(base, DEFAULT_UPSIDE_SCENARIO_SPREAD),
+    downside: hasMeaningfulScenarioDelta(adjustments.downside, base)
+      ? adjustments.downside
+      : mergeScenarioSpread(base, DEFAULT_DOWNSIDE_SCENARIO_SPREAD),
+  };
+}
+
+function hasMeaningfulScenarioDelta(candidate, reference) {
+  const candidateSignal = flattenScenarioSignal(candidate);
+  const referenceSignal = flattenScenarioSignal(reference);
+
+  return candidateSignal.some((value, index) => Math.abs(value - referenceSignal[index]) > 0.0001);
+}
+
+function flattenScenarioSignal(adjustment = {}) {
+  return [
+    ...(adjustment.revenueGrowthDeltaPpts || []),
+    ...(adjustment.grossMarginDeltaBps || []),
+    ...(adjustment.operatingMarginDeltaBps || []),
+    ...(adjustment.capexPctDeltaBps || []),
+    ...(adjustment.daPctDeltaBps || []),
+    ...(adjustment.nwcPctDeltaBps || []),
+    ...(adjustment.taxRateDeltaBps || []),
+    adjustment.waccDeltaBps,
+    adjustment.terminalGrowthDeltaBps,
+  ].map((value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  });
+}
+
+function mergeScenarioSpread(base, spread) {
+  return normalizeScenarioAdjustments({
+    ...base,
+    revenueGrowthDeltaPpts: addScenarioArrays(base.revenueGrowthDeltaPpts, spread.revenueGrowthDeltaPpts),
+    grossMarginDeltaBps: addScenarioArrays(base.grossMarginDeltaBps, spread.grossMarginDeltaBps),
+    operatingMarginDeltaBps: addScenarioArrays(base.operatingMarginDeltaBps, spread.operatingMarginDeltaBps),
+    capexPctDeltaBps: addScenarioArrays(base.capexPctDeltaBps, spread.capexPctDeltaBps),
+    daPctDeltaBps: addScenarioArrays(base.daPctDeltaBps, spread.daPctDeltaBps),
+    nwcPctDeltaBps: addScenarioArrays(base.nwcPctDeltaBps, spread.nwcPctDeltaBps),
+    taxRateDeltaBps: addScenarioArrays(base.taxRateDeltaBps, spread.taxRateDeltaBps),
+    waccDeltaBps: Number(base.waccDeltaBps || 0) + spread.waccDeltaBps,
+    terminalGrowthDeltaBps: Number(base.terminalGrowthDeltaBps || 0) + spread.terminalGrowthDeltaBps,
+    summary: base.summary || spread.summary,
+    keyAssumptions: [
+      ...(Array.isArray(base.keyAssumptions) ? base.keyAssumptions : []),
+      ...spread.keyAssumptions,
+    ].filter(Boolean).slice(0, 6),
+  });
+}
+
+function addScenarioArrays(left = [], right = []) {
+  return Array.from({ length: HORIZON }, (_value, index) => {
+    const leftValue = Number(left[index]);
+    const rightValue = Number(right[index]);
+    return (Number.isFinite(leftValue) ? leftValue : 0) + (Number.isFinite(rightValue) ? rightValue : 0);
+  });
+}
+
 function buildScenarioModel(label, baseline, adjustment) {
   const grossMarginPath = buildPath(baseline.grossMarginStart, baseline.grossMarginEnd).map(
     (value, index) => clamp(value + adjustment.grossMarginDeltaBps[index] / 100, -20, 95)
